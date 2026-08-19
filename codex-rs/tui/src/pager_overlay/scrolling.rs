@@ -18,9 +18,9 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 /// Renders a committed history cell directly into the visible transcript viewport.
-pub(super) struct CellRenderable {
-    pub(super) cell: Arc<dyn HistoryCell>,
-    pub(super) highlighted: bool,
+pub(crate) struct CellRenderable {
+    pub(crate) cell: Arc<dyn HistoryCell>,
+    pub(crate) highlighted: bool,
 }
 
 impl Renderable for CellRenderable {
@@ -84,7 +84,7 @@ impl Renderable for HyperlinkLinesRenderable {
 }
 
 /// Render visible rows directly when supported, preserving the legacy scratch-buffer fallback.
-pub(super) fn render_offset_content(
+pub(crate) fn render_offset_content(
     area: Rect,
     buf: &mut Buffer,
     renderable: &dyn Renderable,

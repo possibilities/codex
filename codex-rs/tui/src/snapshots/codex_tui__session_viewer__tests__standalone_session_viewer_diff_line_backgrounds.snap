@@ -1,0 +1,10 @@
+---
+source: tui/src/session_viewer_tests.rs
+expression: "format!(\"{}\\n\\nbackgrounds\\n{}\", buffer_text(&buffer, width, height),\nbuffer_background_map(&buffer, width, height))"
+---
++ added
+- removed
+
+backgrounds
+++++++++++++++++
+----------------

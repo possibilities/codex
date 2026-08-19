@@ -1,0 +1,9 @@
+---
+source: tui/src/session_viewer_tests.rs
+expression: "render(&mut viewport, 56, height)"
+---
+
+› Show me the session without controls.
+
+
+• The viewer contains only conversation cells.

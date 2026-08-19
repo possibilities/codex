@@ -37,6 +37,18 @@ pub(crate) async fn load_session_transcript(
     raw_reasoning_visibility: RawReasoningVisibility,
     config: Option<&Config>,
 ) -> std::io::Result<TranscriptCells> {
+    let thread = load_session_thread(app_server, thread_id).await?;
+    Ok(thread_to_transcript_cells(
+        thread,
+        raw_reasoning_visibility,
+        config,
+    ))
+}
+
+pub(crate) async fn load_session_thread(
+    app_server: &mut AppServerSession,
+    thread_id: ThreadId,
+) -> std::io::Result<Thread> {
     let mut thread = app_server
         .thread_read(thread_id, /*include_turns*/ false)
         .await
@@ -51,11 +63,7 @@ pub(crate) async fn load_session_transcript(
         )
         .await
         .map_err(std::io::Error::other)?;
-    Ok(thread_to_transcript_cells(
-        thread,
-        raw_reasoning_visibility,
-        config,
-    ))
+    Ok(thread)
 }
 
 pub(crate) fn thread_to_transcript_cells(

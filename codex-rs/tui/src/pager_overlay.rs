@@ -15,7 +15,7 @@
 //! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
 //! mutates in place or when its transcript output is time-dependent.
 
-mod scrolling;
+pub(crate) mod scrolling;
 
 use std::io::Result;
 use std::sync::Arc;

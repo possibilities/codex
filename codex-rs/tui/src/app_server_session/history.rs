@@ -151,6 +151,25 @@ impl AppServerSession {
             .wrap_err("failed to load a bounded thread history page")
     }
 
+    pub(crate) async fn latest_thread_turn(&mut self, thread_id: ThreadId) -> Result<Option<Turn>> {
+        let request_id = self.next_request_id();
+        let response: ThreadTurnsListResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadTurnsList {
+                request_id,
+                params: ThreadTurnsListParams {
+                    thread_id: thread_id.to_string(),
+                    cursor: None,
+                    limit: Some(1),
+                    sort_direction: Some(SortDirection::Desc),
+                    items_view: Some(TurnItemsView::Full),
+                },
+            })
+            .await
+            .wrap_err("failed to load the latest thread turn")?;
+        Ok(response.data.into_iter().next())
+    }
+
     async fn merge_thread_item_page(
         &mut self,
         thread_id: ThreadId,

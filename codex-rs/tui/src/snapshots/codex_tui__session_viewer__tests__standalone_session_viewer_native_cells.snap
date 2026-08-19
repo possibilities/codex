@@ -1,0 +1,16 @@
+---
+source: tui/src/session_viewer_tests.rs
+expression: "render(&mut viewport, 72, height)"
+---
+
+› Make the session viewer feel like Codex.
+
+
+• Ran cargo check -p codex-tui
+  └ Finished dev profile
+
+• Edited tui/src/session_viewer.rs (+1 -1)
+    1 -old viewer
+    1 +native viewer
+
+• Implemented read-only viewing with native history cells.

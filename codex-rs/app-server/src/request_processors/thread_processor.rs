@@ -3085,10 +3085,29 @@ impl ThreadRequestProcessor {
     ) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
         let items_view = items_view.unwrap_or(TurnItemsView::Summary);
         let page_size = thread_turns_page_size(limit);
-        let sort_direction = match sort_direction.unwrap_or(SortDirection::Desc) {
+        let sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
+        let stored_sort_direction = match sort_direction {
             SortDirection::Asc => StoreSortDirection::Asc,
             SortDirection::Desc => StoreSortDirection::Desc,
         };
+        let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
+        let has_live_running_thread = match loaded_thread.as_ref() {
+            Some(thread) => matches!(thread.agent_status().await, AgentStatus::Running),
+            None => false,
+        };
+        let active_turn = if loaded_thread.is_some() {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let state = thread_state.lock().await;
+            state.active_turn_snapshot().filter(|turn| {
+                has_live_running_thread || matches!(turn.status, TurnStatus::InProgress)
+            })
+        } else {
+            None
+        };
+        let has_live_in_progress_turn = has_live_running_thread || active_turn.is_some();
+        let active_turn_leads_page = active_turn.is_some()
+            && cursor.is_none()
+            && matches!(sort_direction, SortDirection::Desc);
         // `Full` is only a temporary compatibility path. Keep it out of ThreadStore's API:
         // load turn shells here, then hydrate their items below.
         let stored_items_view = match items_view {
@@ -3096,28 +3115,48 @@ impl ThreadRequestProcessor {
             TurnItemsView::Summary => StoredTurnItemsView::Summary,
             TurnItemsView::Full => StoredTurnItemsView::NotLoaded,
         };
-        let page = self
+        let map_list_turns_error = |err| match err {
+            ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+            ThreadStoreError::Unsupported { operation } => {
+                unsupported_thread_store_operation(operation)
+            }
+            ThreadStoreError::ThreadNotFound { thread_id } => {
+                invalid_request(format!("no rollout found for thread id {thread_id}"))
+            }
+            err => internal_error(format!("failed to list thread history: {err}")),
+        };
+        let mut page = self
             .thread_store
             .list_turns(StoreListTurnsParams {
                 thread_id,
                 include_archived: true,
-                cursor,
+                cursor: cursor.clone(),
                 page_size,
-                sort_direction,
+                sort_direction: stored_sort_direction,
                 items_view: stored_items_view,
             })
             .await
-            .map_err(|err| match err {
-                ThreadStoreError::InvalidRequest { message } => invalid_request(message),
-                ThreadStoreError::Unsupported { operation } => {
-                    unsupported_thread_store_operation(operation)
-                }
-                ThreadStoreError::ThreadNotFound { thread_id } => {
-                    invalid_request(format!("no rollout found for thread id {thread_id}"))
-                }
-                err => internal_error(format!("failed to list thread history: {err}")),
-            })?;
-        let mut turns = Vec::with_capacity(page.turns.len());
+            .map_err(map_list_turns_error)?;
+        let active_turn_needs_slot = active_turn_leads_page
+            && page_size > 1
+            && active_turn.as_ref().is_some_and(|active_turn| {
+                page.turns.iter().all(|turn| turn.turn_id != active_turn.id)
+            });
+        if active_turn_needs_slot {
+            page = self
+                .thread_store
+                .list_turns(StoreListTurnsParams {
+                    thread_id,
+                    include_archived: true,
+                    cursor: cursor.clone(),
+                    page_size: page_size - 1,
+                    sort_direction: stored_sort_direction,
+                    items_view: stored_items_view,
+                })
+                .await
+                .map_err(map_list_turns_error)?;
+        }
+        let mut turns = Vec::with_capacity(page.turns.len() + usize::from(active_turn.is_some()));
         for turn in page.turns {
             let mut turn = stored_turn_to_api_turn(turn, items_view)?;
             if matches!(items_view, TurnItemsView::Full) {
@@ -3127,21 +3166,39 @@ impl ThreadRequestProcessor {
             }
             turns.push(turn);
         }
-        let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
-        let has_live_running_thread = match loaded_thread.as_ref() {
-            Some(thread) => matches!(thread.agent_status().await, AgentStatus::Running),
-            None => false,
-        };
+        let mut next_cursor = page.next_cursor;
+        if let Some(mut active_turn) = active_turn {
+            apply_thread_turns_items_view(std::slice::from_mut(&mut active_turn), items_view);
+            if let Some(index) = turns.iter().position(|turn| turn.id == active_turn.id) {
+                turns[index] = active_turn;
+            } else {
+                match sort_direction {
+                    SortDirection::Desc if cursor.is_none() => {
+                        if page_size == 1 {
+                            if !turns.is_empty() {
+                                next_cursor = page.backwards_cursor.clone();
+                            }
+                            turns.clear();
+                        }
+                        turns.insert(0, active_turn);
+                    }
+                    SortDirection::Asc if next_cursor.is_none() && turns.len() < page_size => {
+                        turns.push(active_turn);
+                    }
+                    SortDirection::Asc | SortDirection::Desc => {}
+                }
+            }
+        }
         normalize_thread_turns_status(
             &mut turns,
             self.thread_watch_manager
                 .loaded_status_for_thread(&thread_id.to_string())
                 .await,
-            has_live_running_thread,
+            has_live_in_progress_turn,
         );
         Ok(ThreadTurnsListResponse {
             data: turns,
-            next_cursor: page.next_cursor,
+            next_cursor,
             backwards_cursor: page.backwards_cursor,
         })
     }

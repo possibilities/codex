@@ -1,0 +1,7 @@
+---
+source: tui/src/session_viewer_tests.rs
+expression: "buffer_text(&buffer, width, height)"
+---
+
+
+          Loading conversation…

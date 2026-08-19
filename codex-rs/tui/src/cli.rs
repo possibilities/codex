@@ -41,6 +41,10 @@ pub struct Cli {
     #[clap(skip)]
     pub agents_overview: bool,
 
+    /// Internal: launch the standalone read-only session viewer.
+    #[clap(skip)]
+    pub(crate) view_session_id: Option<String>,
+
     // Internal controls set by the top-level `codex fork` subcommand.
     // These are not exposed as user flags on the base `codex` command.
     #[clap(skip)]

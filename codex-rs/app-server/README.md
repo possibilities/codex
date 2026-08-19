@@ -588,6 +588,8 @@ Paginated threads can also use `includeTurns: true`, but clients should prefer
 
 Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a stored thread’s turn history without resuming it. By default, results are sorted descending so clients can start at the present and fetch older turns with `nextCursor`. The response also includes `backwardsCursor`; pass it as `cursor` on a later request with `sortDirection: "asc"` to fetch turns newer than the first item from the earlier page.
 
+For a loaded thread with an active turn, the first descending page includes the current in-progress snapshot ahead of stored history. With `itemsView: "full"`, that snapshot also includes assistant text accumulated from live delta events.
+
 Every returned `Turn` includes `itemsView`, which tells clients whether the `items` array was omitted intentionally (`notLoaded`), contains only summary items (`summary`), or contains every item available from persisted app-server history (`full`). Pass `itemsView` to choose the returned detail level; omitted `itemsView` defaults to `"summary"`.
 
 Paginated threads support the same views. Their `full` view is materialized from the paginated item projection before app-server returns the turn page.

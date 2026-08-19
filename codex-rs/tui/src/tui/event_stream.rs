@@ -26,6 +26,10 @@ use std::task::Context;
 use std::task::Poll;
 
 use crossterm::event::Event;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use crossterm::event::MouseEventKind;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_stream::Stream;
@@ -186,11 +190,11 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
 
     /// Poll the shared crossterm stream for the next mapped `TuiEvent`.
     ///
-    /// This skips events we don't use (mouse events, etc.) and keeps polling until it yields
+    /// This skips events we don't use and keeps polling until it yields
     /// a mapped event, hits `Pending`, or sees EOF/error. When the broker is paused, it drops
     /// the underlying stream and returns `Pending` to fully release stdin.
     pub fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
-        // Some crossterm events map to None (e.g. FocusLost, mouse); loop so we keep polling
+        // Some crossterm events map to None (e.g. FocusLost); loop so we keep polling
         // until we return a mapped event, hit Pending, or see EOF/error.
         loop {
             let poll_result = {
@@ -271,6 +275,22 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 Some(TuiEvent::Resize(ratatui::layout::Size { width, height }))
             }
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => Some(TuiEvent::Key(KeyEvent::new(
+                    KeyCode::Up,
+                    KeyModifiers::NONE,
+                ))),
+                MouseEventKind::ScrollDown => Some(TuiEvent::Key(KeyEvent::new(
+                    KeyCode::Down,
+                    KeyModifiers::NONE,
+                ))),
+                MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::Drag(_)
+                | MouseEventKind::Moved
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight => None,
+            },
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
                 // Keep the startup-cached palette: querying terminal colors here blocks the
@@ -281,7 +301,6 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 self.terminal_focused.store(false, Ordering::Relaxed);
                 None
             }
-            _ => None,
         }
     }
 }
@@ -323,6 +342,8 @@ mod tests {
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
     use pretty_assertions::assert_eq;
     use std::task::Context;
     use std::task::Poll;
@@ -522,6 +543,30 @@ mod tests {
                 height: 24
             }))
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn vertical_mouse_scroll_maps_to_arrow_keys() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        for kind in [MouseEventKind::ScrollUp, MouseEventKind::ScrollDown] {
+            handle.send(Ok(Event::Mouse(MouseEvent {
+                kind,
+                column: 3,
+                row: 4,
+                modifiers: KeyModifiers::NONE,
+            })));
+        }
+
+        for expected in [KeyCode::Up, KeyCode::Down] {
+            match stream.next().await {
+                Some(TuiEvent::Key(key)) => {
+                    assert_eq!(key, KeyEvent::new(expected, KeyModifiers::NONE));
+                }
+                other => panic!("expected mouse scroll key event, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -19,6 +19,7 @@ use crossterm::SynchronizedUpdate;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 #[cfg(not(windows))]
 use crossterm::event::EnableFocusChange;
@@ -312,6 +313,9 @@ fn restore_common(
     }
 
     if let Err(err) = execute!(stdout(), DisableBracketedPaste) {
+        first_error.get_or_insert(err);
+    }
+    if let Err(err) = execute!(stdout(), DisableMouseCapture) {
         first_error.get_or_insert(err);
     }
     let _ = execute!(stdout(), DisableFocusChange);

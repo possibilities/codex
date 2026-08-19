@@ -105,6 +105,7 @@ pub(crate) struct ThreadState {
     last_thread_settings: Option<ThreadSettings>,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    live_agent_messages: HashMap<(String, String), String>,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
 }
@@ -143,6 +144,7 @@ impl ThreadState {
         self.shutdown_drain_waiter = None;
         self.listener_command_tx = None;
         self.current_turn_history.reset();
+        self.live_agent_messages.clear();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
     }
@@ -158,7 +160,25 @@ impl ThreadState {
     }
 
     pub(crate) fn active_turn_snapshot(&self) -> Option<Turn> {
-        self.current_turn_history.active_turn_snapshot()
+        let mut turn = self.current_turn_history.active_turn_snapshot()?;
+        for ((turn_id, item_id), text) in &self.live_agent_messages {
+            if turn_id != &turn.id {
+                continue;
+            }
+            let item = ThreadItem::AgentMessage {
+                id: item_id.clone(),
+                text: text.clone(),
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+            };
+            if let Some(existing) = turn.items.iter_mut().find(|item| item.id() == item_id) {
+                *existing = item;
+            } else {
+                turn.items.push(item);
+            }
+        }
+        Some(turn)
     }
 
     pub(crate) fn register_shutdown_drain_waiter(&mut self) -> oneshot::Receiver<()> {
@@ -186,6 +206,32 @@ impl ThreadState {
                 Some(ThreadItem::from(CoreTurnItem::AgentMessage(item.clone())));
         }
         self.current_turn_history.handle_event(event);
+        match event {
+            EventMsg::AgentMessageContentDelta(payload) => {
+                self.live_agent_messages
+                    .entry((event_turn_id.to_string(), payload.item_id.clone()))
+                    .or_default()
+                    .push_str(&payload.delta);
+            }
+            EventMsg::ItemCompleted(payload) => {
+                if let CoreTurnItem::AgentMessage(item) = &payload.item {
+                    self.live_agent_messages
+                        .remove(&(event_turn_id.to_string(), item.id.clone()));
+                }
+            }
+            EventMsg::AgentMessage(_) => {
+                self.live_agent_messages
+                    .retain(|(turn_id, _), _| turn_id != event_turn_id);
+            }
+            EventMsg::TurnStarted(_) => {
+                self.live_agent_messages.clear();
+            }
+            EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_) => {
+                self.live_agent_messages
+                    .retain(|(turn_id, _), _| turn_id != event_turn_id);
+            }
+            _ => {}
+        }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)) {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             if !self.current_turn_history.has_active_turn() {

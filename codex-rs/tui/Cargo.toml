@@ -10,6 +10,10 @@ name = "codex-tui"
 path = "src/main.rs"
 
 [[bin]]
+name = "codex-session-viewer"
+path = "src/bin/session-viewer.rs"
+
+[[bin]]
 name = "md-events"
 path = "src/bin/md-events.rs"
 

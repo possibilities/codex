@@ -148,7 +148,9 @@ pub(super) async fn run_main_inner(
         && loader_overrides_are_default(&launch_loader_overrides)
         && !strict_config
         && !cli.bypass_hook_trust;
-    let initial_screen = if cli.resume_picker || cli.fork_picker || cli.agents_overview {
+    let initial_screen = if cli.view_session_id.is_some() {
+        startup_draft::StartupDraftInitialScreen::SessionViewer
+    } else if cli.resume_picker || cli.fork_picker || cli.agents_overview {
         startup_draft::StartupDraftInitialScreen::SessionPicker
     } else if !cli.oss
         && explicit_remote_endpoint.is_none()
@@ -167,7 +169,11 @@ pub(super) async fn run_main_inner(
     };
     let session_action = if cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some() {
         startup_draft::StartupDraftSessionAction::Fork
-    } else if cli.resume_picker || cli.resume_last || cli.resume_session_id.is_some() {
+    } else if cli.view_session_id.is_some()
+        || cli.resume_picker
+        || cli.resume_last
+        || cli.resume_session_id.is_some()
+    {
         startup_draft::StartupDraftSessionAction::Resume
     } else {
         startup_draft::StartupDraftSessionAction::New
@@ -435,7 +441,10 @@ pub(super) async fn run_main_inner(
         }
     }
 
-    if !app_server_target.uses_remote_workspace() && !workload_identity_selected {
+    if cli.view_session_id.is_none()
+        && !app_server_target.uses_remote_workspace()
+        && !workload_identity_selected
+    {
         #[allow(clippy::print_stderr)]
         if let Err(err) = startup_draft
             .run_until(enforce_login_restrictions(&config.auth_config()))
@@ -527,25 +536,45 @@ pub(super) async fn run_main_inner(
         .with(otel_tracing_layer)
         .try_init();
 
-    let app_result = run_ratatui_app(
-        cli,
-        arg0_paths,
-        loader_overrides,
-        strict_config,
-        app_server_target,
-        remote_cwd_override,
-        config,
-        manually_selected_oss_provider,
-        overrides,
-        cli_kv_overrides,
-        cloud_config_bundle,
-        feedback,
-        log_db,
-        state_db,
-        environment_manager,
-        startup_draft,
-    )
-    .await
+    let app_result = if cli.view_session_id.is_some() {
+        session_viewer::run_app(
+            cli,
+            arg0_paths,
+            loader_overrides,
+            strict_config,
+            app_server_target,
+            remote_cwd_override,
+            config,
+            cli_kv_overrides,
+            cloud_config_bundle,
+            feedback,
+            log_db,
+            state_db,
+            environment_manager,
+            startup_draft,
+        )
+        .await
+    } else {
+        run_ratatui_app(
+            cli,
+            arg0_paths,
+            loader_overrides,
+            strict_config,
+            app_server_target,
+            remote_cwd_override,
+            config,
+            manually_selected_oss_provider,
+            overrides,
+            cli_kv_overrides,
+            cloud_config_bundle,
+            feedback,
+            log_db,
+            state_db,
+            environment_manager,
+            startup_draft,
+        )
+        .await
+    }
     .map_err(|err| {
         err.downcast::<std::io::Error>()
             .unwrap_or_else(|err| std::io::Error::other(err.to_string()))

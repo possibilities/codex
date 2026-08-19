@@ -55,6 +55,7 @@ pub(crate) enum StartupDraftInitialScreen {
     Composer,
     Onboarding,
     SessionPicker,
+    SessionViewer,
 }
 
 /// Describes the session being prepared behind the provisional composer.
@@ -193,9 +194,7 @@ impl StartupDraftPump {
             return Ok(());
         }
         self.session_action = session_action;
-        if self.initial_screen == StartupDraftInitialScreen::Composer {
-            self.draw(tui, tui.terminal.last_known_screen_size)?;
-        }
+        self.draw_initial_screen(tui)?;
         Ok(())
     }
 
@@ -204,9 +203,7 @@ impl StartupDraftPump {
     where
         F: Future,
     {
-        if self.initial_screen == StartupDraftInitialScreen::Composer {
-            self.draw(tui, tui.terminal.last_known_screen_size)?;
-        }
+        self.draw_initial_screen(tui)?;
         tokio::pin!(future);
         loop {
             tokio::select! {
@@ -267,18 +264,27 @@ impl StartupDraftPump {
         self.bottom_pane.composer_draft_snapshot()
     }
 
-    /// Draw the initial composer only when no protected startup screen must appear first.
+    /// Draw the initial surface when it does not belong to a later startup owner.
     fn show_initial_screen(&mut self, tui: &mut Tui) -> io::Result<()> {
-        if self.initial_screen == StartupDraftInitialScreen::Composer {
-            self.show(tui)?;
-        }
-        Ok(())
+        self.draw_initial_screen(tui)
     }
 
     /// Reveal the editable composer once an expected protected screen has finished.
     pub(crate) fn show(&mut self, tui: &mut Tui) -> io::Result<()> {
         self.initial_screen = StartupDraftInitialScreen::Composer;
         self.draw(tui, tui.terminal.last_known_screen_size)
+    }
+
+    fn draw_initial_screen(&mut self, tui: &mut Tui) -> io::Result<()> {
+        match self.initial_screen {
+            StartupDraftInitialScreen::Composer => {
+                self.draw(tui, tui.terminal.last_known_screen_size)
+            }
+            StartupDraftInitialScreen::SessionViewer => crate::session_viewer::draw_loading(tui),
+            StartupDraftInitialScreen::Onboarding | StartupDraftInitialScreen::SessionPicker => {
+                Ok(())
+            }
+        }
     }
 
     fn handle_event(&mut self, tui: &mut Tui, event: TuiEvent) -> io::Result<()> {
@@ -306,9 +312,7 @@ impl StartupDraftPump {
                 TuiEvent::Paste(text) => !text.is_empty(),
                 TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume => {
                     self.pending_paste_newline = Some((started_at, newlines));
-                    if self.initial_screen == StartupDraftInitialScreen::Composer {
-                        self.draw(tui, screen_size)?;
-                    }
+                    self.draw_initial_screen(tui)?;
                     return Ok(());
                 }
                 TuiEvent::Key(_) => false,
@@ -360,8 +364,12 @@ impl StartupDraftPump {
             }
             TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume => {}
         }
-        if self.initial_screen == StartupDraftInitialScreen::Composer {
-            self.draw(tui, screen_size)?;
+        match self.initial_screen {
+            StartupDraftInitialScreen::Composer => self.draw(tui, screen_size)?,
+            StartupDraftInitialScreen::SessionViewer => {
+                crate::session_viewer::draw_loading(tui)?;
+            }
+            StartupDraftInitialScreen::Onboarding | StartupDraftInitialScreen::SessionPicker => {}
         }
         while self.app_event_rx.try_recv().is_ok() {}
         Ok(())
