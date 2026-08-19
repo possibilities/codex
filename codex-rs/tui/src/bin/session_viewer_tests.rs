@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn parses_required_session_id_and_no_alt_screen() {
     let cli = Cli::try_parse_from([
-        "codex-session-viewer",
+        "codex-viewer",
         "00000000-0000-4000-8000-000000000123",
         "--no-alt-screen",
     ])
@@ -26,5 +26,5 @@ fn parses_required_session_id_and_no_alt_screen() {
 
 #[test]
 fn requires_session_id() {
-    assert!(Cli::try_parse_from(["codex-session-viewer"]).is_err());
+    assert!(Cli::try_parse_from(["codex-viewer"]).is_err());
 }

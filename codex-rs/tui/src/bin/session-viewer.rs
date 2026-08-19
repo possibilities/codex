@@ -11,7 +11,7 @@ use codex_utils_cli::CliConfigOverrides;
 
 /// Read-only, conversation-only viewer for a saved Codex session.
 #[derive(Debug, Parser)]
-#[command(name = "codex-session-viewer", version)]
+#[command(name = "codex-viewer", version)]
 struct Cli {
     /// Session id (UUID) to display.
     #[arg(value_name = "SESSION_ID")]

@@ -68,7 +68,7 @@ pub async fn run_session_viewer(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
 ) -> io::Result<AppExitInfo> {
-    let mut cli = crate::Cli::try_parse_from(["codex-session-viewer"]).map_err(io::Error::other)?;
+    let mut cli = crate::Cli::try_parse_from(["codex-viewer"]).map_err(io::Error::other)?;
     cli.view_session_id = Some(options.session_id);
     cli.no_alt_screen = options.no_alt_screen;
     cli.config_overrides = options.config_overrides;

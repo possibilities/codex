@@ -10,7 +10,7 @@ name = "codex-tui"
 path = "src/main.rs"
 
 [[bin]]
-name = "codex-session-viewer"
+name = "codex-viewer"
 path = "src/bin/session-viewer.rs"
 
 [[bin]]
