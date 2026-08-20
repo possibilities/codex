@@ -33,23 +33,22 @@ use crate::AppExitInfo;
 use crate::AppServerTarget;
 use crate::ExitReason;
 use crate::app_server_session::AppServerSession;
-use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
-use crate::thread_transcript::RawReasoningVisibility;
-use crate::thread_transcript::TranscriptCells;
 use crate::thread_transcript::load_session_thread;
-use crate::thread_transcript::thread_to_transcript_cells;
 use crate::token_usage::TokenUsage;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 
 use self::rollout_watcher::LocalRolloutUpdate;
 use self::rollout_watcher::LocalRolloutWatcher;
-use self::transcript::turn_to_transcript_cells;
-use self::viewport::ConversationViewport;
+use self::viewer_state::PreparedTurnReplacement;
+use self::viewer_state::SessionViewer;
+use self::viewer_state::prepare_initial_viewer;
+use self::viewer_state::prepare_turn_replacement;
 
 mod rollout_watcher;
 mod transcript;
+mod viewer_state;
 mod viewport;
 
 const LIVE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
@@ -81,228 +80,19 @@ pub async fn run_session_viewer(
     .await
 }
 
-struct SessionViewer {
-    thread: Thread,
-    config: Config,
-    rendered_turn_cells: Vec<RenderedTurnCells>,
-    viewport: ConversationViewport,
-}
-
-type RenderedTurnCells = TranscriptCells;
-
-impl SessionViewer {
-    fn new(thread: Thread, config: Config) -> Result<Self> {
-        let keymap = RuntimeKeymap::from_config(&config.tui_keymap)
-            .map_err(color_eyre::eyre::Report::msg)?
-            .pager;
-        let rendered_turn_cells = thread
-            .turns
-            .iter()
-            .map(|turn| turn_to_transcript_cells(&thread, turn, &config))
-            .collect::<Vec<_>>();
-        let cells = flattened_transcript_cells(&thread, &config, &rendered_turn_cells);
-        Ok(Self {
-            thread,
-            config,
-            rendered_turn_cells,
-            viewport: ConversationViewport::new(cells, keymap),
-        })
-    }
-
-    fn replace_turns(&mut self, turns: Vec<Turn>) -> bool {
-        let visible_change = self.thread.turns.len() != turns.len()
-            || self
-                .thread
-                .turns
-                .iter()
-                .zip(&turns)
-                .any(|(existing, replacement)| {
-                    existing.id != replacement.id || existing.items != replacement.items
-                });
-        if !visible_change {
-            self.thread.turns = turns;
-            return false;
-        }
-
-        let previous_turns = std::mem::replace(&mut self.thread.turns, turns);
-        let previous_cells = std::mem::take(&mut self.rendered_turn_cells);
-        self.rendered_turn_cells = self
-            .thread
-            .turns
-            .iter()
-            .enumerate()
-            .map(|(index, turn)| {
-                if previous_turns
-                    .get(index)
-                    .is_some_and(|previous| previous == turn)
-                {
-                    previous_cells.get(index).cloned().unwrap_or_default()
-                } else {
-                    turn_to_transcript_cells(&self.thread, turn, &self.config)
-                }
-            })
-            .collect();
-        self.viewport.replace_cells(flattened_transcript_cells(
-            &self.thread,
-            &self.config,
-            &self.rendered_turn_cells,
-        ));
-        true
-    }
-
-    fn merge_latest_turn(&mut self, turn: Turn) -> bool {
-        if let Some(index) = self
-            .thread
-            .turns
-            .iter()
-            .position(|existing| existing.id == turn.id)
-        {
-            if self.thread.turns[index] == turn {
-                return false;
-            }
-            let previous_turn = std::mem::replace(&mut self.thread.turns[index], turn);
-            let items_changed = previous_turn.items != self.thread.turns[index].items;
-            if !items_changed {
-                return false;
-            }
-            self.rendered_turn_cells[index] =
-                turn_to_transcript_cells(&self.thread, &self.thread.turns[index], &self.config);
-        } else {
-            let cells = turn_to_transcript_cells(&self.thread, &turn, &self.config);
-            self.thread.turns.push(turn);
-            self.rendered_turn_cells.push(cells);
-        }
-        self.viewport.replace_cells(flattened_transcript_cells(
-            &self.thread,
-            &self.config,
-            &self.rendered_turn_cells,
-        ));
-        true
-    }
-
-    fn apply_history_changes(&mut self, changes: Vec<ThreadHistoryChangeSet>) -> bool {
-        let mut visible_change = false;
-        let mut changed_turn_ids = Vec::new();
-        for changes in changes {
-            for turn_id in changes.removed_turn_ids {
-                if let Some(index) = self.thread.turns.iter().position(|turn| turn.id == turn_id) {
-                    self.thread.turns.remove(index);
-                    self.rendered_turn_cells.remove(index);
-                    visible_change = true;
-                }
-            }
-            for change in changes.changed_turns {
-                let index = if let Some(index) = self
-                    .thread
-                    .turns
-                    .iter()
-                    .position(|turn| turn.id == change.turn_id)
-                {
-                    index
-                } else {
-                    self.thread.turns.push(Turn {
-                        id: change.turn_id.clone(),
-                        items: Vec::new(),
-                        items_view: codex_app_server_protocol::TurnItemsView::Full,
-                        status: change.status.clone(),
-                        error: None,
-                        started_at: None,
-                        completed_at: None,
-                        duration_ms: None,
-                    });
-                    self.rendered_turn_cells.push(Vec::new());
-                    self.thread.turns.len() - 1
-                };
-                let turn = &mut self.thread.turns[index];
-                turn.status = change.status;
-                turn.error = change.error;
-                turn.started_at = change.started_at;
-                turn.completed_at = change.completed_at;
-                turn.duration_ms = change.duration_ms;
-            }
-            for change in changes.changed_items {
-                let index = if let Some(index) = self
-                    .thread
-                    .turns
-                    .iter()
-                    .position(|turn| turn.id == change.turn_id)
-                {
-                    index
-                } else {
-                    self.thread.turns.push(Turn {
-                        id: change.turn_id.clone(),
-                        items: Vec::new(),
-                        items_view: codex_app_server_protocol::TurnItemsView::Full,
-                        status: codex_app_server_protocol::TurnStatus::InProgress,
-                        error: None,
-                        started_at: None,
-                        completed_at: None,
-                        duration_ms: None,
-                    });
-                    self.rendered_turn_cells.push(Vec::new());
-                    self.thread.turns.len() - 1
-                };
-                let turn = &mut self.thread.turns[index];
-                if let Some(existing) = turn
-                    .items
-                    .iter_mut()
-                    .find(|item| item.id() == change.item.id())
-                {
-                    if existing == &change.item {
-                        continue;
-                    }
-                    *existing = change.item;
-                } else {
-                    turn.items.push(change.item);
-                }
-                if !changed_turn_ids.contains(&change.turn_id) {
-                    changed_turn_ids.push(change.turn_id);
-                }
-                visible_change = true;
-            }
-        }
-
-        for turn_id in changed_turn_ids {
-            if let Some(index) = self.thread.turns.iter().position(|turn| turn.id == turn_id) {
-                self.rendered_turn_cells[index] =
-                    turn_to_transcript_cells(&self.thread, &self.thread.turns[index], &self.config);
-            }
-        }
-        if visible_change {
-            self.viewport.replace_cells(flattened_transcript_cells(
-                &self.thread,
-                &self.config,
-                &self.rendered_turn_cells,
-            ));
-        }
-        visible_change
-    }
-}
-
-fn flattened_transcript_cells(
-    thread: &Thread,
-    config: &Config,
-    rendered_turn_cells: &[RenderedTurnCells],
-) -> TranscriptCells {
-    let cells = rendered_turn_cells
-        .iter()
-        .flat_map(|cells| cells.iter().cloned())
-        .collect::<TranscriptCells>();
-    if !cells.is_empty() {
-        return cells;
-    }
-
-    let mut empty_thread = thread.clone();
-    empty_thread.turns.clear();
-    thread_to_transcript_cells(empty_thread, raw_reasoning_visibility(config), Some(config))
-}
-
-fn raw_reasoning_visibility(config: &Config) -> RawReasoningVisibility {
-    if config.show_raw_agent_reasoning {
-        RawReasoningVisibility::Visible
-    } else {
-        RawReasoningVisibility::Hidden
-    }
+enum ViewerUpdate {
+    Backfill {
+        replacement: PreparedTurnReplacement,
+        rollout_offset: u64,
+    },
+    Replace {
+        replacement: PreparedTurnReplacement,
+        rollout_offset: u64,
+    },
+    Changes {
+        changes: Vec<ThreadHistoryChangeSet>,
+        rollout_offset: u64,
+    },
 }
 
 fn render_loading(area: Rect, buf: &mut Buffer) {
@@ -353,45 +143,29 @@ async fn load_initial_thread(
         .await
         .map_err(io::Error::other)?;
     let mut rollout_watcher = LocalRolloutWatcher::for_thread(&thread);
-    let mut rollout_watcher_failed = false;
-    let loaded_local_rollout = if let Some(watcher) = rollout_watcher.as_mut() {
-        match watcher.load_turns_if_changed().await {
-            Ok(Some(LocalRolloutUpdate::Replace(turns))) => {
+    if let Some(watcher) = rollout_watcher.as_mut() {
+        match watcher.load_recent_turn().await {
+            Ok(turns) => {
                 thread.turns = turns;
-                true
             }
-            Ok(Some(LocalRolloutUpdate::Changes(_))) => {
-                return Err(io::Error::other(
-                    "session viewer rollout watcher produced deltas before its initial snapshot",
-                ));
-            }
-            Ok(None) => true,
             Err(error) => {
                 tracing::debug!(
                     path = %watcher.path.display(),
                     %error,
-                    "session viewer initial rollout load failed"
+                    "session viewer recent rollout load failed"
                 );
-                rollout_watcher_failed = true;
-                false
             }
         }
-    } else {
-        false
-    };
-    if !loaded_local_rollout {
-        thread = load_session_thread(app_server, thread_id).await?;
+        return Ok((thread, rollout_watcher));
     }
-    if !loaded_local_rollout
-        && let Some(turn) = app_server
-            .latest_thread_turn(thread_id)
-            .await
-            .map_err(io::Error::other)?
+
+    thread = load_session_thread(app_server, thread_id).await?;
+    if let Some(turn) = app_server
+        .latest_thread_turn(thread_id)
+        .await
+        .map_err(io::Error::other)?
     {
         merge_latest_turn(&mut thread.turns, turn);
-    }
-    if rollout_watcher_failed {
-        rollout_watcher = None;
     }
     Ok((thread, rollout_watcher))
 }
@@ -444,11 +218,77 @@ pub(crate) async fn run_app(
     let mut app_server = AppServerSession::new(app_server, app_server_target.thread_params_mode())
         .with_startup_config(&config)
         .with_remote_cwd_override(remote_cwd_override);
+    let loaded = startup_draft
+        .run_until(&mut tui, load_initial_thread(&mut app_server, thread_id))
+        .await;
+    let (thread, rollout_watcher) = match loaded {
+        Ok(Ok(loaded)) => loaded,
+        Ok(Err(error)) => {
+            drop(startup_draft);
+            cleanup_viewer(
+                &mut tui,
+                app_server,
+                /*mouse_capture_enabled*/ false,
+                &mut terminal_restore_guard,
+            )
+            .await;
+            return Ok(AppExitInfo::fatal(format!(
+                "No saved session found with ID {session_id}: {error}"
+            )));
+        }
+        Err(error) => {
+            drop(startup_draft);
+            cleanup_viewer(
+                &mut tui,
+                app_server,
+                /*mouse_capture_enabled*/ false,
+                &mut terminal_restore_guard,
+            )
+            .await;
+            return Err(error.into());
+        }
+    };
+    let initial_width = tui
+        .terminal
+        .size()
+        .map(|size| size.width.max(1))
+        .unwrap_or(/*default*/ 80);
+    let prepared_viewer = startup_draft
+        .run_until(
+            &mut tui,
+            prepare_initial_viewer(thread, config, initial_width),
+        )
+        .await;
+    let mut viewer = match prepared_viewer {
+        Ok(Ok(viewer)) => viewer,
+        Ok(Err(error)) => {
+            drop(startup_draft);
+            cleanup_viewer(
+                &mut tui,
+                app_server,
+                /*mouse_capture_enabled*/ false,
+                &mut terminal_restore_guard,
+            )
+            .await;
+            return Err(error);
+        }
+        Err(error) => {
+            drop(startup_draft);
+            cleanup_viewer(
+                &mut tui,
+                app_server,
+                /*mouse_capture_enabled*/ false,
+                &mut terminal_restore_guard,
+            )
+            .await;
+            return Err(error.into());
+        }
+    };
     drop(startup_draft);
 
     tui.set_alt_screen_enabled(crate::determine_alt_screen_mode(
         cli.no_alt_screen,
-        config.tui_alternate_screen,
+        viewer.config.tui_alternate_screen,
     ));
     let mut mouse_capture_enabled = false;
     let setup_result = tui.enter_alt_screen().and_then(|()| {
@@ -456,7 +296,9 @@ pub(crate) async fn run_app(
             set_mouse_capture(&mut tui, /*enabled*/ true)?;
             mouse_capture_enabled = true;
         }
-        draw_loading(&mut tui)
+        tui.draw(u16::MAX, |frame| {
+            viewer.viewport.render(frame.area(), frame.buffer);
+        })
     });
     if let Err(error) = setup_result {
         cleanup_viewer(
@@ -468,35 +310,6 @@ pub(crate) async fn run_app(
         .await;
         return Err(error.into());
     }
-
-    let (thread, rollout_watcher) = match load_initial_thread(&mut app_server, thread_id).await {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            cleanup_viewer(
-                &mut tui,
-                app_server,
-                mouse_capture_enabled,
-                &mut terminal_restore_guard,
-            )
-            .await;
-            return Ok(AppExitInfo::fatal(format!(
-                "No saved session found with ID {session_id}: {error}"
-            )));
-        }
-    };
-    let mut viewer = match SessionViewer::new(thread, config) {
-        Ok(viewer) => viewer,
-        Err(error) => {
-            cleanup_viewer(
-                &mut tui,
-                app_server,
-                mouse_capture_enabled,
-                &mut terminal_restore_guard,
-            )
-            .await;
-            return Err(error);
-        }
-    };
     let run_result = run_event_loop(
         &mut tui,
         &mut app_server,
@@ -563,16 +376,98 @@ async fn run_event_loop(
         viewer.viewport.render(frame.area(), frame.buffer);
     })?;
     let (rollout_tx, mut rollout_rx) = tokio::sync::mpsc::channel(1);
-    let rollout_task = rollout_watcher.map(|mut watcher| {
-        tokio::spawn(async move {
+    let mut rollout_tasks = Vec::new();
+    if let Some(mut watcher) = rollout_watcher {
+        let mut full_watcher = watcher.fresh();
+        let full_tx = rollout_tx.clone();
+        let full_thread = viewer.thread.clone();
+        let full_config = viewer.config.clone();
+        let full_width = tui.terminal.size()?.width.max(1);
+        rollout_tasks.push(tokio::spawn(async move {
+            match full_watcher.load_turns_if_changed().await {
+                Ok(Some(LocalRolloutUpdate::Replace(turns))) => {
+                    let rollout_offset = full_watcher.offset;
+                    let replacement = tokio::task::spawn_blocking(move || {
+                        prepare_turn_replacement(&full_thread, &full_config, turns, full_width)
+                    })
+                    .await;
+                    match replacement {
+                        Ok(replacement) => {
+                            let _ = full_tx
+                                .send(ViewerUpdate::Backfill {
+                                    replacement,
+                                    rollout_offset,
+                                })
+                                .await;
+                        }
+                        Err(error) => tracing::debug!(
+                            %error,
+                            "session viewer full history rendering failed"
+                        ),
+                    }
+                }
+                Ok(Some(LocalRolloutUpdate::Changes(_))) => tracing::debug!(
+                    "session viewer full history load unexpectedly produced changes"
+                ),
+                Ok(None) => {}
+                Err(error) => tracing::debug!(
+                    path = %full_watcher.path.display(),
+                    %error,
+                    "session viewer full history load failed"
+                ),
+            }
+        }));
+
+        let live_thread = viewer.thread.clone();
+        let live_config = viewer.config.clone();
+        let live_width = full_width;
+        let live_tx = rollout_tx.clone();
+        rollout_tasks.push(tokio::spawn(async move {
             let mut refresh = tokio::time::interval(ROLLOUT_REFRESH_INTERVAL);
             refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
             refresh.tick().await;
             loop {
                 refresh.tick().await;
                 match watcher.load_turns_if_changed().await {
-                    Ok(Some(update)) => {
-                        if rollout_tx.send(update).await.is_err() {
+                    Ok(Some(LocalRolloutUpdate::Replace(turns))) => {
+                        let rollout_offset = watcher.offset;
+                        let thread = live_thread.clone();
+                        let config = live_config.clone();
+                        let replacement = tokio::task::spawn_blocking(move || {
+                            prepare_turn_replacement(&thread, &config, turns, live_width)
+                        })
+                        .await;
+                        let replacement = match replacement {
+                            Ok(replacement) => replacement,
+                            Err(error) => {
+                                tracing::debug!(
+                                    %error,
+                                    "session viewer replacement rendering failed"
+                                );
+                                continue;
+                            }
+                        };
+                        if live_tx
+                            .send(ViewerUpdate::Replace {
+                                replacement,
+                                rollout_offset,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(LocalRolloutUpdate::Changes(changes))) => {
+                        let rollout_offset = watcher.offset;
+                        if live_tx
+                            .send(ViewerUpdate::Changes {
+                                changes,
+                                rollout_offset,
+                            })
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -584,12 +479,14 @@ async fn run_event_loop(
                     ),
                 }
             }
-        })
-    });
-    let poll_live_turn = rollout_task.is_none();
+        }));
+    }
+    drop(rollout_tx);
+    let poll_live_turn = rollout_tasks.is_empty();
 
     let result = loop {
         tokio::select! {
+            biased;
             event = events.next() => {
                 let Some(event) = event else {
                     break Err(io::Error::new(
@@ -613,7 +510,7 @@ async fn run_event_loop(
                     TuiEvent::Paste(_) => {}
                 }
             }
-            _ = live_refresh.tick(), if poll_live_turn => {
+            _ = live_refresh.tick(), if poll_live_turn && viewer.viewport.is_following() => {
                 match app_server.latest_thread_turn(thread_id).await {
                     Ok(Some(turn)) => {
                         if viewer.merge_latest_turn(turn) {
@@ -624,15 +521,30 @@ async fn run_event_loop(
                     Err(error) => tracing::debug!(%error, "session viewer live refresh failed"),
                 }
             }
-            update = rollout_rx.recv(), if rollout_task.is_some() => {
+            update = rollout_rx.recv(), if !rollout_tasks.is_empty() && viewer.viewport.is_following() => {
                 match update {
-                    Some(LocalRolloutUpdate::Replace(turns)) => {
-                        if viewer.replace_turns(turns) {
+                    Some(ViewerUpdate::Backfill {
+                        replacement,
+                        rollout_offset,
+                    }) => {
+                        if viewer.backfill_prepared_turns(replacement, rollout_offset) {
                             tui.frame_requester().schedule_frame();
                         }
                     }
-                    Some(LocalRolloutUpdate::Changes(changes)) => {
-                        if viewer.apply_history_changes(changes) {
+                    Some(ViewerUpdate::Replace {
+                        replacement,
+                        rollout_offset,
+                    }) => {
+                        viewer.rollout_offset = rollout_offset;
+                        if viewer.install_prepared_turns(replacement) {
+                            tui.frame_requester().schedule_frame();
+                        }
+                    }
+                    Some(ViewerUpdate::Changes {
+                        changes,
+                        rollout_offset,
+                    }) => {
+                        if viewer.apply_history_changes(changes, rollout_offset) {
                             tui.frame_requester().schedule_frame();
                         }
                     }
@@ -643,7 +555,7 @@ async fn run_event_loop(
             }
         }
     };
-    if let Some(task) = rollout_task {
+    for task in rollout_tasks {
         task.abort();
     }
     result

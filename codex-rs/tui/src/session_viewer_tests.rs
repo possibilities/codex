@@ -20,13 +20,20 @@ use pretty_assertions::assert_eq;
 use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::io::Write as _;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
+use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::ConfigBuilder;
+use crate::thread_transcript::TranscriptCells;
+
+use super::transcript::render_turn;
+use super::transcript::rerender_turn_suffix;
+use super::viewport::ConversationViewport;
 
 #[derive(Debug)]
 struct TestCell(String);
@@ -294,14 +301,68 @@ async fn renders_native_markdown_command_and_file_change_cells() {
         name: None,
         turns: vec![turn],
     };
-    let cells = turn_to_transcript_cells(&thread, &thread.turns[0], &config);
-    let mut viewport = viewport(cells);
-    let height = viewport.content_height(/*width*/ 72) as u16;
+    let cells = render_turn(&thread, &thread.turns[0], &config).cells;
+    let mut native_viewport = viewport(cells);
+    let height = native_viewport.content_height(/*width*/ 72) as u16;
 
     assert_snapshot!(
         "standalone_session_viewer_native_cells",
-        render(&mut viewport, /*width*/ 72, height)
+        render(&mut native_viewport, /*width*/ 72, height)
     );
+
+    let mut previous_turn = thread.turns[0].clone();
+    previous_turn.items.truncate(2);
+    let previous_render = render_turn(&thread, &previous_turn, &config);
+    let incremental_render = rerender_turn_suffix(
+        &thread,
+        &previous_turn,
+        &previous_render,
+        &thread.turns[0],
+        &config,
+    );
+    let full_render = render_turn(&thread, &thread.turns[0], &config);
+    assert!(
+        previous_render
+            .cells
+            .iter()
+            .zip(&incremental_render.cells)
+            .all(|(previous, incremental)| Arc::ptr_eq(previous, incremental))
+    );
+    let mut incremental_viewport = viewport(incremental_render.cells);
+    let mut full_viewport = viewport(full_render.cells);
+    let full_rendered = render(&mut full_viewport, /*width*/ 72, height);
+    assert_eq!(
+        render(&mut incremental_viewport, /*width*/ 72, height),
+        full_rendered,
+    );
+
+    let mut partial_thread = thread.clone();
+    partial_thread.turns[0].items.drain(..2);
+    let mut backfilled_viewer =
+        SessionViewer::new(partial_thread, config.clone(), /*width*/ 72).expect("partial viewer");
+    let replacement =
+        prepare_turn_replacement(&thread, &config, thread.turns.clone(), /*width*/ 72);
+    assert!(backfilled_viewer.backfill_prepared_turns(replacement, /*rollout_offset*/ 1,));
+    assert_eq!(backfilled_viewer.thread, thread);
+    assert_eq!(
+        render(&mut backfilled_viewer.viewport, /*width*/ 72, height),
+        full_rendered,
+    );
+
+    let mut newer_turn = thread.turns[0].clone();
+    newer_turn.items.push(ThreadItem::AgentMessage {
+        id: "agent-after-backfill".to_string(),
+        text: "newer than the full snapshot".to_string(),
+        phase: Some(codex_protocol::models::MessagePhase::Commentary),
+        memory_citation: None,
+        delivery: None,
+    });
+    assert!(backfilled_viewer.merge_latest_turn(newer_turn.clone()));
+    backfilled_viewer.rollout_offset = 2;
+    let stale_replacement =
+        prepare_turn_replacement(&thread, &config, thread.turns.clone(), /*width*/ 72);
+    assert!(!backfilled_viewer.backfill_prepared_turns(stale_replacement, /*rollout_offset*/ 1,));
+    assert_eq!(backfilled_viewer.thread.turns, vec![newer_turn]);
 }
 
 #[test]
@@ -398,6 +459,21 @@ fn unchanged_cells_keep_their_cached_layout_across_updates() {
 }
 
 #[test]
+fn prepared_layout_does_not_remeasure_stable_cells() {
+    let height_calls = Arc::new(AtomicUsize::new(0));
+    let cell = Arc::new(CountingCell {
+        text: "prepared".to_string(),
+        height_calls: Arc::clone(&height_calls),
+    });
+    let mut viewport = viewport(Vec::new());
+
+    viewport.replace_cells_with_heights(vec![cell], /*width*/ 30, vec![Some(/*height*/ 1)]);
+    viewport.content_height(/*width*/ 30);
+
+    assert_eq!(height_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn latest_turn_replaces_in_place_without_duplicates() {
     let mut turns = vec![turn("turn-1", "partial")];
     let completed = turn("turn-1", "complete");
@@ -459,6 +535,126 @@ async fn local_rollout_watcher_only_reloads_changed_files() {
     }
 
     assert_eq!(initial, build_turns_from_rollout_items(&updated_items));
+}
+
+#[tokio::test]
+async fn local_rollout_watcher_seeds_from_only_the_latest_turn() {
+    let temp_dir = tempfile::tempdir().expect("temporary rollout directory");
+    let path = temp_dir.path().join("rollout.jsonl");
+    let first_started = RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: "turn-old".to_string(),
+        trace_id: None,
+        started_at: None,
+        model_context_window: None,
+        collaboration_mode_kind: Default::default(),
+    }));
+    let first_message = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+        message: "older conversation".to_string(),
+        ..Default::default()
+    }));
+    let latest_started = RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: "turn-latest".to_string(),
+        trace_id: None,
+        started_at: None,
+        model_context_window: None,
+        collaboration_mode_kind: Default::default(),
+    }));
+    let latest_message = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+        message: "latest conversation".to_string(),
+        ..Default::default()
+    }));
+    let recent_items = vec![latest_started.clone(), latest_message.clone()];
+    let initial_items = vec![
+        first_started,
+        first_message,
+        latest_started.clone(),
+        latest_message.clone(),
+    ];
+    write_rollout(&path, initial_items.clone());
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open rollout for partial append")
+        .write_all(b"{\"timestamp\":")
+        .expect("append partial rollout record");
+    let mut watcher = LocalRolloutWatcher::new(path.clone(), CoreThreadHistoryMode::Legacy);
+
+    let mut turns = watcher
+        .load_recent_turn()
+        .await
+        .expect("load recent rollout turn");
+    assert_eq!(turns, build_turns_from_rollout_items(&recent_items));
+
+    let agent_message = RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+        message: "followed live".to_string(),
+        phase: None,
+        memory_citation: None,
+        delivery: None,
+    }));
+    let mut updated_items = initial_items;
+    updated_items.push(agent_message.clone());
+    write_rollout(&path, updated_items);
+    let update = watcher
+        .load_turns_if_changed()
+        .await
+        .expect("load appended rollout items")
+        .expect("live rollout update");
+    let LocalRolloutUpdate::Changes(changes) = update else {
+        panic!("recently seeded watcher should process only appended changes");
+    };
+    for change in changes {
+        rollout_watcher::apply_changes(&mut turns, change);
+    }
+
+    assert_eq!(
+        turns,
+        build_turns_from_rollout_items(
+            &recent_items
+                .into_iter()
+                .chain(std::iter::once(agent_message))
+                .collect::<Vec<_>>()
+        )
+    );
+}
+
+#[tokio::test]
+async fn local_rollout_watcher_bounds_the_initial_active_turn() {
+    let temp_dir = tempfile::tempdir().expect("temporary rollout directory");
+    let path = temp_dir.path().join("rollout.jsonl");
+    let mut items = vec![RolloutItem::EventMsg(EventMsg::TurnStarted(
+        TurnStartedEvent {
+            turn_id: "turn-large".to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        },
+    ))];
+    items.extend(
+        (0..rollout_watcher::INITIAL_TURN_ITEM_LIMIT + 3).map(|index| {
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: format!("message {index}"),
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+            }))
+        }),
+    );
+    write_rollout(&path, items.clone());
+    let mut expected = build_turns_from_rollout_items(&items);
+    let remove_count = expected[0]
+        .items
+        .len()
+        .saturating_sub(rollout_watcher::INITIAL_TURN_ITEM_LIMIT);
+    expected[0].items.drain(..remove_count);
+    let mut watcher = LocalRolloutWatcher::new(path, CoreThreadHistoryMode::Legacy);
+
+    let turns = watcher
+        .load_recent_turn()
+        .await
+        .expect("load bounded recent rollout turn");
+
+    assert_eq!(turns, expected);
 }
 
 #[tokio::test]

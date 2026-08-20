@@ -26,16 +26,20 @@ use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::TranscriptCells;
 use crate::thread_transcript::thread_items_to_transcript_cells;
 
-pub(super) fn turn_to_transcript_cells(
-    thread: &Thread,
-    turn: &Turn,
-    config: &Config,
-) -> TranscriptCells {
+#[derive(Clone)]
+pub(super) struct RenderedTurn {
+    pub(super) cells: TranscriptCells,
+    item_cell_starts: Vec<usize>,
+}
+
+pub(super) fn render_turn(thread: &Thread, turn: &Turn, config: &Config) -> RenderedTurn {
     let mut renderer = TurnTranscriptRenderer {
         thread,
         config,
         cells: Vec::new(),
+        item_cell_starts: Vec::new(),
         pending_exec: None,
+        pending_exec_start: None,
     };
     for item in &turn.items {
         renderer.push(item);
@@ -43,21 +47,98 @@ pub(super) fn turn_to_transcript_cells(
     renderer.finish()
 }
 
+pub(super) fn rerender_turn_suffix(
+    thread: &Thread,
+    previous_turn: &Turn,
+    previous_render: &RenderedTurn,
+    turn: &Turn,
+    config: &Config,
+) -> RenderedTurn {
+    let first_changed = previous_turn
+        .items
+        .iter()
+        .zip(&turn.items)
+        .position(|(previous, current)| previous != current)
+        .unwrap_or_else(|| previous_turn.items.len().min(turn.items.len()));
+    if first_changed == previous_turn.items.len() && first_changed == turn.items.len() {
+        return previous_render.clone();
+    }
+
+    let mut start_item = first_changed;
+    let changed_item_is_command = turn
+        .items
+        .get(start_item)
+        .or_else(|| previous_turn.items.get(start_item))
+        .is_some_and(is_command_execution);
+    if changed_item_is_command {
+        while start_item > 0
+            && turn
+                .items
+                .get(start_item - 1)
+                .or_else(|| previous_turn.items.get(start_item - 1))
+                .is_some_and(is_command_execution)
+        {
+            start_item -= 1;
+        }
+    }
+
+    let prefix_cell_count = previous_render
+        .item_cell_starts
+        .get(start_item)
+        .copied()
+        .unwrap_or(previous_render.cells.len());
+    let mut renderer = TurnTranscriptRenderer {
+        thread,
+        config,
+        cells: Vec::new(),
+        item_cell_starts: Vec::new(),
+        pending_exec: None,
+        pending_exec_start: None,
+    };
+    for item in &turn.items[start_item..] {
+        renderer.push(item);
+    }
+    let suffix = renderer.finish();
+    let mut cells = previous_render.cells[..prefix_cell_count].to_vec();
+    cells.extend(suffix.cells);
+    let mut item_cell_starts = previous_render.item_cell_starts[..start_item].to_vec();
+    item_cell_starts.extend(
+        suffix
+            .item_cell_starts
+            .into_iter()
+            .map(|start| prefix_cell_count.saturating_add(start)),
+    );
+    RenderedTurn {
+        cells,
+        item_cell_starts,
+    }
+}
+
+fn is_command_execution(item: &ThreadItem) -> bool {
+    matches!(item, ThreadItem::CommandExecution { .. })
+}
+
 struct TurnTranscriptRenderer<'a> {
     thread: &'a Thread,
     config: &'a Config,
     cells: TranscriptCells,
+    item_cell_starts: Vec<usize>,
     pending_exec: Option<ExecCell>,
+    pending_exec_start: Option<usize>,
 }
 
 impl TurnTranscriptRenderer<'_> {
     fn push(&mut self, item: &ThreadItem) {
         match item {
-            ThreadItem::CommandExecution { .. } => self.push_command(item),
+            ThreadItem::CommandExecution { .. } => {
+                let start = self.push_command(item);
+                self.item_cell_starts.push(start);
+            }
             ThreadItem::FileChange {
                 changes, status, ..
             } => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 self.cells.push(Arc::new(history_cell::new_patch_event(
                     file_update_changes_to_display(changes.clone()),
                     self.thread.cwd.as_path(),
@@ -71,10 +152,12 @@ impl TurnTranscriptRenderer<'_> {
             }
             ThreadItem::McpToolCall { .. } => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 self.push_mcp(item);
             }
             ThreadItem::WebSearch(item) => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 self.cells.push(Arc::new(history_cell::new_web_search_call(
                     item.id.clone(),
                     item.query.clone(),
@@ -85,6 +168,7 @@ impl TurnTranscriptRenderer<'_> {
             }
             ThreadItem::ImageView { path, .. } => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 self.cells
                     .push(Arc::new(history_cell::new_view_image_tool_call(
                         path.clone(),
@@ -93,6 +177,7 @@ impl TurnTranscriptRenderer<'_> {
             }
             ThreadItem::ImageGeneration(item) => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 self.cells
                     .push(Arc::new(history_cell::new_image_generation_call(
                         item.id.clone(),
@@ -103,6 +188,7 @@ impl TurnTranscriptRenderer<'_> {
             }
             item @ ThreadItem::CollabAgentToolCall { .. } => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 if let Some(cell) = crate::multi_agents::tool_call_history_cell(
                     item,
                     /*cached_spawn_request*/ None,
@@ -113,6 +199,7 @@ impl TurnTranscriptRenderer<'_> {
             }
             item @ ThreadItem::SubAgentActivity { .. } => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 if let Some(cell) = crate::multi_agents::sub_agent_activity_history_cell(item) {
                     self.cells.push(Arc::new(cell));
                 }
@@ -128,6 +215,7 @@ impl TurnTranscriptRenderer<'_> {
             | ThreadItem::ExitedReviewMode { .. }
             | ThreadItem::ContextCompaction { .. }) => {
                 self.flush_exec();
+                self.item_cell_starts.push(self.cells.len());
                 self.cells.extend(thread_items_to_transcript_cells(
                     ThreadId::from_string(&self.thread.id).ok(),
                     &self.thread.cwd,
@@ -139,7 +227,7 @@ impl TurnTranscriptRenderer<'_> {
         }
     }
 
-    fn push_command(&mut self, item: &ThreadItem) {
+    fn push_command(&mut self, item: &ThreadItem) -> usize {
         let ThreadItem::CommandExecution {
             id,
             command,
@@ -152,7 +240,7 @@ impl TurnTranscriptRenderer<'_> {
             ..
         } = item
         else {
-            return;
+            return self.cells.len();
         };
         let command = split_command_string(command);
         let parsed = command_actions
@@ -169,8 +257,11 @@ impl TurnTranscriptRenderer<'_> {
                 /*interaction_input*/ None,
             )
         });
-        if !added_to_group {
+        let start = if added_to_group {
+            self.pending_exec_start.unwrap_or(self.cells.len())
+        } else {
             self.flush_exec();
+            let start = self.cells.len();
             self.pending_exec = Some(new_active_exec_command(
                 id.clone(),
                 command,
@@ -179,7 +270,9 @@ impl TurnTranscriptRenderer<'_> {
                 /*interaction_input*/ None,
                 self.config.animations,
             ));
-        }
+            self.pending_exec_start = Some(start);
+            start
+        };
 
         if !matches!(status, CommandExecutionStatus::InProgress) {
             let exit_code = match status {
@@ -207,6 +300,7 @@ impl TurnTranscriptRenderer<'_> {
                 self.flush_exec();
             }
         }
+        start
     }
 
     fn push_mcp(&mut self, item: &ThreadItem) {
@@ -259,11 +353,15 @@ impl TurnTranscriptRenderer<'_> {
         if let Some(cell) = self.pending_exec.take() {
             self.cells.push(Arc::new(cell));
         }
+        self.pending_exec_start = None;
     }
 
-    fn finish(mut self) -> TranscriptCells {
+    fn finish(mut self) -> RenderedTurn {
         self.flush_exec();
-        self.cells
+        RenderedTurn {
+            cells: self.cells,
+            item_cell_starts: self.item_cell_starts,
+        }
     }
 }
 

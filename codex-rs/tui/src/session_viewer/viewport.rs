@@ -77,6 +77,30 @@ impl ConversationViewport {
         self.cell_heights = cell_heights;
     }
 
+    pub(super) fn replace_cells_with_heights(
+        &mut self,
+        cells: TranscriptCells,
+        width: u16,
+        prepared_heights: Vec<Option<u16>>,
+    ) {
+        debug_assert_eq!(cells.len(), prepared_heights.len());
+        self.replace_cells(cells);
+        if self.cell_heights_width == Some(width) {
+            for (height, prepared) in self.cell_heights.iter_mut().zip(prepared_heights) {
+                if height.is_none() {
+                    *height = prepared;
+                }
+            }
+        } else {
+            self.cell_heights = prepared_heights;
+            self.cell_heights_width = Some(width);
+        }
+    }
+
+    pub(super) fn is_following(&self) -> bool {
+        self.follow_tail
+    }
+
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> bool {
         if self.keymap.close.is_pressed(key) {
             return true;

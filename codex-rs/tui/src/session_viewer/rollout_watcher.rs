@@ -1,7 +1,11 @@
 use std::ffi::OsStr;
+use std::fs::File;
 use std::io;
+use std::io::Read as _;
+use std::io::Seek as _;
 use std::io::SeekFrom;
 use std::path::PathBuf;
+use std::time::Instant;
 use std::time::SystemTime;
 
 use codex_app_server_protocol::Thread;
@@ -12,14 +16,19 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::project_rollout_line;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_rollout::ReverseJsonlScanner;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
+use codex_rollout::ScanOutcome;
 use codex_rollout::decode_rollout_line;
 use codex_rollout::is_persisted_rollout_item;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
+
+pub(super) const INITIAL_TURN_ITEM_LIMIT: usize = 24;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RolloutFileStamp {
@@ -31,7 +40,7 @@ pub(super) struct LocalRolloutWatcher {
     pub(super) path: PathBuf,
     history_mode: ThreadHistoryMode,
     last_stamp: Option<RolloutFileStamp>,
-    offset: u64,
+    pub(super) offset: u64,
     builder: Option<ThreadHistoryBuilder>,
     turns: Vec<Turn>,
 }
@@ -56,6 +65,78 @@ impl LocalRolloutWatcher {
 
     pub(super) fn for_thread(thread: &Thread) -> Option<Self> {
         Some(Self::new(thread.path.clone()?, thread.history_mode.into()))
+    }
+
+    pub(super) fn fresh(&self) -> Self {
+        Self::new(self.path.clone(), self.history_mode)
+    }
+
+    /// Seeds live following from the newest turn without replaying the full rollout.
+    pub(super) async fn load_recent_turn(&mut self) -> io::Result<Vec<Turn>> {
+        let started = Instant::now();
+        let metadata = tokio::fs::metadata(&self.path).await?;
+        let stamp = RolloutFileStamp {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        };
+        if self.path.extension() == Some(OsStr::new("zst")) {
+            self.builder = Some(ThreadHistoryBuilder::new());
+            self.offset = stamp.len;
+            self.last_stamp = Some(stamp);
+            return Ok(Vec::new());
+        }
+
+        let path = self.path.clone();
+        let history_mode = self.history_mode;
+        let (turns, builder, parse_errors, consumed_len) = tokio::task::spawn_blocking(move || {
+            let mut file = File::open(path)?;
+            let consumed_len = complete_file_len(&mut file, stamp.len)?;
+            let mut scanner = ReverseJsonlScanner::new_at(file, consumed_len)?;
+            let mut items = Vec::new();
+            let mut parse_errors = 0usize;
+            while let Some(outcome) = scanner.scan_next::<Value>()? {
+                let line = match outcome {
+                    ScanOutcome::Parsed(value) => match decode_rollout_line(value) {
+                        Ok(line) => line,
+                        Err(_) => {
+                            parse_errors = parse_errors.saturating_add(1);
+                            continue;
+                        }
+                    },
+                    ScanOutcome::Rejected(_) => {
+                        parse_errors = parse_errors.saturating_add(1);
+                        continue;
+                    }
+                };
+                let is_turn_start =
+                    matches!(&line.item, RolloutItem::EventMsg(EventMsg::TurnStarted(_)));
+                items.push(line.item);
+                if is_turn_start {
+                    break;
+                }
+            }
+            items.reverse();
+            let (turns, builder) = build_turns(items, history_mode);
+            Ok::<_, io::Error>((turns, builder, parse_errors, consumed_len))
+        })
+        .await
+        .map_err(io::Error::other)??;
+        log_parse_errors(&self.path, parse_errors);
+
+        self.turns = turns;
+        self.builder = Some(builder);
+        self.offset = consumed_len;
+        self.last_stamp = Some(RolloutFileStamp {
+            len: self.offset,
+            modified: stamp.modified,
+        });
+        tracing::debug!(
+            path = %self.path.display(),
+            turns = self.turns.len(),
+            elapsed = ?started.elapsed(),
+            "session viewer loaded recent rollout turn"
+        );
+        Ok(initial_turn_tail(self.turns.clone()))
     }
 
     pub(super) async fn load_turns_if_changed(&mut self) -> io::Result<Option<LocalRolloutUpdate>> {
@@ -89,7 +170,13 @@ impl LocalRolloutWatcher {
             } else {
                 let bytes = read_prefix(&self.path, stamp.len).await?;
                 let consumed_len = complete_prefix_len(&bytes);
-                let (items, parse_errors) = decode_items(&bytes[..consumed_len]);
+                let decoded = tokio::task::spawn_blocking(move || {
+                    let (items, parse_errors) = decode_items(&bytes[..consumed_len]);
+                    (items, consumed_len, parse_errors)
+                })
+                .await
+                .map_err(io::Error::other)?;
+                let (items, consumed_len, parse_errors) = decoded;
                 (
                     items,
                     u64::try_from(consumed_len).map_err(io::Error::other)?,
@@ -97,32 +184,13 @@ impl LocalRolloutWatcher {
                 )
             };
         log_parse_errors(&self.path, parse_errors);
-
-        let persisted_items = items
-            .into_iter()
-            .filter(|item| is_persisted_rollout_item(item, self.history_mode))
-            .collect::<Vec<_>>();
-        let mut live_builder = ThreadHistoryBuilder::new();
-        self.turns = match self.history_mode {
-            ThreadHistoryMode::Legacy => {
-                let mut snapshot_builder = ThreadHistoryBuilder::new();
-                for item in &persisted_items {
-                    snapshot_builder.handle_rollout_item(item);
-                    live_builder.handle_rollout_item(item);
-                }
-                snapshot_builder.finish()
-            }
-            ThreadHistoryMode::Paginated => {
-                let mut turns = Vec::new();
-                for item in &persisted_items {
-                    for change in paginated_change_sets(&mut live_builder, item) {
-                        apply_changes(&mut turns, change);
-                    }
-                }
-                turns
-            }
-        };
-        self.builder = Some(live_builder);
+        let history_mode = self.history_mode;
+        let (turns, builder) =
+            tokio::task::spawn_blocking(move || build_turns(items, history_mode))
+                .await
+                .map_err(io::Error::other)?;
+        self.turns = turns;
+        self.builder = Some(builder);
         self.offset = consumed_len;
         self.last_stamp = Some(RolloutFileStamp {
             len: consumed_len,
@@ -182,6 +250,45 @@ impl LocalRolloutWatcher {
     }
 }
 
+fn initial_turn_tail(mut turns: Vec<Turn>) -> Vec<Turn> {
+    for turn in &mut turns {
+        let remove_count = turn.items.len().saturating_sub(INITIAL_TURN_ITEM_LIMIT);
+        turn.items.drain(..remove_count);
+    }
+    turns
+}
+
+fn build_turns(
+    items: Vec<RolloutItem>,
+    history_mode: ThreadHistoryMode,
+) -> (Vec<Turn>, ThreadHistoryBuilder) {
+    let persisted_items = items
+        .into_iter()
+        .filter(|item| is_persisted_rollout_item(item, history_mode))
+        .collect::<Vec<_>>();
+    let mut live_builder = ThreadHistoryBuilder::new();
+    let turns = match history_mode {
+        ThreadHistoryMode::Legacy => {
+            let mut snapshot_builder = ThreadHistoryBuilder::new();
+            for item in &persisted_items {
+                snapshot_builder.handle_rollout_item(item);
+                live_builder.handle_rollout_item(item);
+            }
+            snapshot_builder.finish()
+        }
+        ThreadHistoryMode::Paginated => {
+            let mut turns = Vec::new();
+            for item in &persisted_items {
+                for change in paginated_change_sets(&mut live_builder, item) {
+                    apply_changes(&mut turns, change);
+                }
+            }
+            turns
+        }
+    };
+    (turns, live_builder)
+}
+
 fn paginated_change_sets(
     builder: &mut ThreadHistoryBuilder,
     item: &RolloutItem,
@@ -208,6 +315,35 @@ fn complete_prefix_len(bytes: &[u8]) -> usize {
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |index| index + 1)
+}
+
+fn complete_file_len(file: &mut File, len: u64) -> io::Result<u64> {
+    const READ_CHUNK_SIZE: usize = 64 * 1024;
+
+    if len == 0 {
+        return Ok(0);
+    }
+    file.seek(SeekFrom::Start(len - 1))?;
+    let mut final_byte = [0];
+    file.read_exact(&mut final_byte)?;
+    if final_byte[0] == b'\n' {
+        return Ok(len);
+    }
+
+    let mut chunk = vec![0; READ_CHUNK_SIZE];
+    let mut chunk_end = len;
+    while chunk_end > 0 {
+        let read_len =
+            usize::try_from(chunk_end.min(READ_CHUNK_SIZE as u64)).map_err(io::Error::other)?;
+        let chunk_start = chunk_end - read_len as u64;
+        file.seek(SeekFrom::Start(chunk_start))?;
+        file.read_exact(&mut chunk[..read_len])?;
+        if let Some(index) = chunk[..read_len].iter().rposition(|byte| *byte == b'\n') {
+            return Ok(chunk_start + index as u64 + 1);
+        }
+        chunk_end = chunk_start;
+    }
+    Ok(0)
 }
 
 fn decode_items(bytes: &[u8]) -> (Vec<RolloutItem>, usize) {
