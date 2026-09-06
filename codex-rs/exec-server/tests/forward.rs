@@ -62,9 +62,11 @@ async fn forwarder_runs_commands_and_transfers_files() -> Result<()> {
         timeout(
             TEST_TIMEOUT,
             client.exec(ExecParams {
+                metadata: Default::default(),
                 process_id: process_id.clone(),
                 argv,
                 cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
+                shell_snapshot: None,
                 env_policy: None,
                 env: HashMap::new(),
                 tty: false,
@@ -115,6 +117,7 @@ async fn forwarder_runs_commands_and_transfers_files() -> Result<()> {
         TEST_TIMEOUT,
         client.fs_write_file(FsWriteFileParams {
             path: PathUri::from_host_native_path(&path)?,
+            follow_symlinks: None,
             data_base64: STANDARD.encode(&contents),
             sandbox: None,
         }),
@@ -124,6 +127,7 @@ async fn forwarder_runs_commands_and_transfers_files() -> Result<()> {
     let read_response = client
         .fs_read_file(FsReadFileParams {
             path: PathUri::from_host_native_path(path)?,
+            follow_symlinks: None,
             sandbox: None,
         })
         .await?;

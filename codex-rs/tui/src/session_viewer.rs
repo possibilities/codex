@@ -507,7 +507,7 @@ async fn run_event_loop(
                             break Err(error);
                         }
                     }
-                    TuiEvent::Paste(_) => {}
+                    TuiEvent::Paste(_) | TuiEvent::FocusGained | TuiEvent::FocusLost => {}
                 }
             }
             _ = live_refresh.tick(), if poll_live_turn && viewer.viewport.is_following() => {

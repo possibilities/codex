@@ -53,12 +53,13 @@ async fn cmd_shell_runs_quoted_hook_command_path() {
     let command = format!(r#""{}" notify"#, hook_path.display());
     let env = HashMap::new();
     let handler = ConfiguredHandler {
+        builtin: false,
         event_name: HookEventName::SessionStart,
         matcher: None,
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
-        source_path,
+        source_path: source_path.into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {
@@ -102,12 +103,13 @@ async fn fast_exiting_hook_preserves_stdout_when_stdin_is_not_consumed() {
     let command = "echo hook-ran";
     let env = HashMap::new();
     let handler = ConfiguredHandler {
+        builtin: false,
         event_name: HookEventName::SessionStart,
         matcher: None,
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
-        source_path,
+        source_path: source_path.into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {
@@ -140,12 +142,13 @@ async fn command_hook_does_not_expose_configured_noise_auth_token() {
         ("CODEX_HOOK_SAFE_ENV".to_string(), "visible".to_string()),
     ]);
     let handler = ConfiguredHandler {
+        builtin: false,
         event_name: HookEventName::SessionStart,
         matcher: None,
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
-        source_path,
+        source_path: source_path.into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {
@@ -298,13 +301,15 @@ fn write_handler(temp: &TempDir, source: &str) -> ConfiguredHandler {
     let script_path = temp.path().join("async_hook.py");
     std::fs::write(&script_path, source).expect("write async test hook");
     ConfiguredHandler {
+        builtin: false,
         event_name: HookEventName::UserPromptSubmit,
         matcher: None,
         timeout_sec: 10,
         status_message: None,
         additional_context_limit: Default::default(),
         source_path: AbsolutePathBuf::try_from(temp.path().join("hooks.json"))
-            .expect("absolute test hook path"),
+            .expect("absolute test hook path")
+            .into(),
         source: HookSource::User,
         display_order: 0,
         kind: ConfiguredHandlerKind::Command {

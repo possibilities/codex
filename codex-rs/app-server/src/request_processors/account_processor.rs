@@ -1,13 +1,18 @@
+use super::bedrock_auth::BedrockProviderConfig;
 use super::bedrock_auth::clear_user_model_provider_if_bedrock;
-use super::bedrock_auth::set_user_model_provider_to_bedrock;
+use super::bedrock_auth::configure_bedrock_provider;
+use super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
+use codex_app_server_protocol::GetAccountRateLimitsParams;
 use codex_login::LoginOnboardingEntrypoint;
+use codex_login::login_with_bedrock_access_keys;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
+mod bedrock_setup;
 mod rate_limit_resets;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
@@ -16,9 +21,9 @@ const ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/
 const THREAD_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 60);
 const ACCOUNT_WORKSPACE_MESSAGES_FETCH_TIMEOUT: Duration =
     Duration::from_millis(/*millis*/ 1000);
-// Login overrides are intentionally available only in debug builds.
-#[cfg(debug_assertions)]
+// Packaged clients use this together with the OAuth client ID override for staging login.
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
+// The development success-page redirect remains debug-only.
 #[cfg(debug_assertions)]
 const LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_DEV_OPEN_APP_URL";
 
@@ -61,6 +66,15 @@ enum RefreshTokenRequestOutcome {
     NotAttemptedOrSucceeded,
     FailedTransiently,
     FailedPermanently,
+}
+
+enum BedrockLoginCredentials {
+    ApiKey(String),
+    AccessKeys {
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+    },
 }
 
 impl Drop for ActiveLogin {
@@ -141,8 +155,9 @@ impl AccountRequestProcessor {
 
     pub(crate) async fn get_account_rate_limits(
         &self,
+        params: Option<GetAccountRateLimitsParams>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_rate_limits_response()
+        self.get_account_rate_limits_response(params.unwrap_or_default())
             .await
             .map(|response| Some(response.into()))
     }
@@ -325,8 +340,29 @@ impl AccountRequestProcessor {
                 .await;
             }
             LoginAccountParams::AmazonBedrock { api_key, region } => {
-                self.login_amazon_bedrock_v2(request_id, api_key, region)
-                    .await;
+                self.login_amazon_bedrock_v2(
+                    request_id,
+                    BedrockLoginCredentials::ApiKey(api_key),
+                    region,
+                )
+                .await;
+            }
+            LoginAccountParams::AmazonBedrockAccessKeys {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                region,
+            } => {
+                self.login_amazon_bedrock_v2(
+                    request_id,
+                    BedrockLoginCredentials::AccessKeys {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    },
+                    region,
+                )
+                .await;
             }
         }
         Ok(())
@@ -342,6 +378,24 @@ impl AccountRequestProcessor {
         invalid_request(
             "Configured external authentication is owned by the app-server host and cannot be changed through account RPCs.",
         )
+    }
+
+    fn ensure_bedrock_login_allowed(&self) -> Result<(), JSONRPCErrorError> {
+        if self.auth_manager.is_workload_identity_selected() {
+            return Err(self.configured_auth_owned_by_host_error());
+        }
+        if self.auth_manager.is_external_chatgpt_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
+        if !self
+            .auth_manager
+            .is_login_method_allowed(ForcedLoginMethod::Api)
+        {
+            return Err(invalid_request(
+                "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
+            ));
+        }
+        Ok(())
     }
 
     async fn login_api_key_common(
@@ -401,48 +455,76 @@ impl AccountRequestProcessor {
     async fn login_amazon_bedrock_v2(
         &self,
         request_id: ConnectionRequestId,
-        api_key: String,
+        credentials: BedrockLoginCredentials,
         region: String,
     ) {
         let result = async {
-            if self.auth_manager.is_external_chatgpt_auth_active() {
-                return Err(self.external_auth_active_error());
-            }
-            if !self
-                .auth_manager
-                .is_login_method_allowed(ForcedLoginMethod::Api)
-            {
-                return Err(invalid_request(
-                    "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
-                ));
-            }
+            self.ensure_bedrock_login_allowed()?;
 
-            let api_key = api_key.trim();
-            if api_key.is_empty() {
-                return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+            match &credentials {
+                BedrockLoginCredentials::ApiKey(api_key) => {
+                    if api_key.trim().is_empty() {
+                        return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+                    }
+                }
+                BedrockLoginCredentials::AccessKeys {
+                    access_key_id,
+                    secret_access_key,
+                    ..
+                } => {
+                    if access_key_id.trim().is_empty() || secret_access_key.trim().is_empty() {
+                        return Err(invalid_request(
+                            "AWS access key ID and secret access key must not be empty.",
+                        ));
+                    }
+                }
             }
             let region = region.trim();
             if !is_supported_amazon_bedrock_region(region) {
                 return Err(invalid_request(format!(
-                    "Amazon Bedrock Mantle does not support region `{region}`"
+                    "Amazon Bedrock does not support region `{region}`"
                 )));
             }
 
-            {
-                let mut guard = self.active_login.lock().await;
-                if let Some(active) = guard.take() {
-                    drop(active);
+            self.cancel_active_login().await;
+            ensure_user_model_provider_can_be_bedrock(&self.config_manager).await?;
+            configure_bedrock_provider(
+                &self.config_manager,
+                BedrockProviderConfig {
+                    region: matches!(&credentials, BedrockLoginCredentials::AccessKeys { .. })
+                        .then_some(region),
+                    profile: None,
+                },
+            )
+            .await?;
+
+            match credentials {
+                BedrockLoginCredentials::ApiKey(api_key) => login_with_bedrock_api_key(
+                    &self.config.codex_home,
+                    api_key.trim(),
+                    region,
+                    self.config.cli_auth_credentials_store_mode,
+                    self.config.auth_keyring_backend_kind(),
+                ),
+                BedrockLoginCredentials::AccessKeys {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => {
+                    let session_token = session_token
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|token| !token.is_empty());
+                    login_with_bedrock_access_keys(
+                        &self.config.codex_home,
+                        access_key_id.trim(),
+                        secret_access_key.trim(),
+                        session_token,
+                        self.config.cli_auth_credentials_store_mode,
+                        self.config.auth_keyring_backend_kind(),
+                    )
                 }
             }
-
-            set_user_model_provider_to_bedrock(&self.config_manager).await?;
-            login_with_bedrock_api_key(
-                &self.config.codex_home,
-                api_key,
-                region,
-                self.config.cli_auth_credentials_store_mode,
-                self.config.auth_keyring_backend_kind(),
-            )
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
             self.auth_manager.reload().await;
             self.config_manager.clear_cloud_config_bundle_loader();
@@ -479,7 +561,7 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let opts = LoginServerOptions {
+        let mut opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
             login_success_page,
@@ -492,24 +574,20 @@ impl AccountRequestProcessor {
                 config.auth_route_config(),
             )
         };
+        if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
+            && !issuer.trim().is_empty()
+        {
+            opts.issuer = issuer;
+        }
         #[cfg(debug_assertions)]
-        let opts = {
-            let mut opts = opts;
-            if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
-                && !issuer.trim().is_empty()
-            {
-                opts.issuer = issuer;
-            }
-            if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
-                && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
-                && !open_app_url.trim().is_empty()
-            {
-                *url = open_app_url
-                    .parse()
-                    .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
-            }
-            opts
-        };
+        if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
+            && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
+            && !open_app_url.trim().is_empty()
+        {
+            *url = open_app_url
+                .parse()
+                .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
+        }
 
         Ok(opts)
     }
@@ -874,16 +952,7 @@ impl AccountRequestProcessor {
         if self.auth_manager.is_workload_identity_selected() {
             return Err(self.configured_auth_owned_by_host_error());
         }
-        let managed_bedrock_auth = matches!(
-            self.auth_manager.auth_cached(),
-            Some(CodexAuth::BedrockApiKey(_))
-        );
         let config = self.load_latest_config().await;
-        if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
-            return Err(invalid_request(
-                "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication",
-            ));
-        }
 
         // Cancel any active login attempt.
         {
@@ -900,11 +969,11 @@ impl AccountRequestProcessor {
             }
         }
 
-        self.config_manager.clear_cloud_config_bundle_loader();
-
-        if managed_bedrock_auth {
-            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
+        if config.model_provider.is_amazon_bedrock() {
+            clear_user_model_provider_if_bedrock(&self.config_manager, &config).await?;
         }
+
+        self.config_manager.clear_cloud_config_bundle_loader();
 
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
@@ -1059,6 +1128,7 @@ impl AccountRequestProcessor {
 
     async fn get_account_rate_limits_response(
         &self,
+        params: GetAccountRateLimitsParams,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(invalid_request(
@@ -1078,10 +1148,23 @@ impl AccountRequestProcessor {
             self.config.http_client_factory(),
         );
 
-        let (response, detailed_rate_limit_reset_credits) = tokio::join!(
-            client.get_rate_limits_with_reset_credits(),
-            Self::detailed_rate_limit_reset_credits(&client),
-        );
+        let usage_request = async {
+            if params.supports_luna_reserve
+                && auth.auth_mode() == codex_protocol::auth::AuthMode::Chatgpt
+                && !auth.is_fedramp_account()
+            {
+                client.get_rate_limits_with_luna_reserve().await
+            } else {
+                client.get_rate_limits_with_reset_credits().await
+            }
+        };
+        let (response, detailed_rate_limit_reset_credits) = tokio::join!(usage_request, async {
+            if params.exclude_reset_credit_details {
+                None
+            } else {
+                Self::detailed_rate_limit_reset_credits(&client).await
+            }
+        },);
         let response = response
             .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
         if response.rate_limits.is_empty() {
@@ -1118,7 +1201,21 @@ impl AccountRequestProcessor {
                 })
         });
 
+        // Match desktop's account readiness check before exposing account-bound CTA content.
+        // Normal rate limits remain available when older backends omit identity or banner data.
+        let matches_active_account = !auth.is_fedramp_account()
+            && response.account_id.is_some()
+            && response.account_id == auth.get_account_id()
+            && response.user_id.is_some()
+            && response.user_id == auth.get_chatgpt_user_id();
+        let rate_limit_upsell = response
+            .rate_limit_upsell
+            .filter(|_| matches_active_account);
+
         Ok(GetAccountRateLimitsResponse {
+            ordinary_usage_allowed: response
+                .ordinary_usage_allowed
+                .filter(|_| matches_active_account),
             rate_limits: rate_limits.into(),
             rate_limits_by_limit_id: Some(
                 rate_limits_by_limit_id
@@ -1127,6 +1224,8 @@ impl AccountRequestProcessor {
                     .collect(),
             ),
             rate_limit_reset_credits,
+            account_id: response.account_id,
+            rate_limit_upsell,
         })
     }
 

@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use crate::McpConfig;
 use crate::mcp::McpPermissionPromptAutoApproveContext;
 use crate::mcp::mcp_permission_prompt_is_auto_approved;
 use anyhow::Context;
@@ -25,7 +26,6 @@ use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_TOOL_SUGGESTION;
 use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY;
 use codex_protocol::mcp_approval_meta::STRICT_AUTO_REVIEW_KEY;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -41,8 +41,7 @@ use tokio::sync::oneshot;
 
 static NEXT_ELICITATION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
-const STRICT_AUTO_REVIEW_DECLINE_MESSAGE: &str =
-    "Strict automated review failed. Do not proceed or ask the user for approval.";
+const STRICT_AUTO_REVIEW_DECLINE_MESSAGE: &str = "Automated review of this operation failed. Do not proceed without asking the user for explicit approval.";
 
 #[derive(Debug, Clone)]
 pub struct ElicitationReviewRequest {
@@ -154,53 +153,48 @@ impl ElicitationRequestRouter {
 
 #[derive(Clone)]
 pub(crate) struct ElicitationAuthority {
-    pub(crate) approval_policy: AskForApproval,
-    pub(crate) permission_profile: PermissionProfile,
+    pub(crate) config: Arc<McpConfig>,
     reviewer: Option<ElicitationReviewerHandle>,
     lifecycle: Option<ElicitationLifecycle>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct ElicitationRequestManager {
     router: ElicitationRequestRouter,
-    pub(crate) authority: Arc<StdMutex<ElicitationAuthority>>,
+    pub(crate) authority: Arc<StdMutex<Option<ElicitationAuthority>>>,
 }
 
 impl ElicitationRequestManager {
     pub(crate) fn new(
-        approval_policy: AskForApproval,
-        permission_profile: PermissionProfile,
+        config: Arc<McpConfig>,
         reviewer: Option<ElicitationReviewerHandle>,
         lifecycle: Option<ElicitationLifecycle>,
         router: ElicitationRequestRouter,
     ) -> Self {
         Self {
             router,
-            authority: Arc::new(StdMutex::new(ElicitationAuthority {
-                approval_policy,
-                permission_profile,
+            authority: Arc::new(StdMutex::new(Some(ElicitationAuthority {
+                config,
                 reviewer,
                 lifecycle,
-            })),
+            }))),
         }
     }
 
     pub(crate) fn update(
         &self,
-        approval_policy: AskForApproval,
-        permission_profile: PermissionProfile,
+        config: Arc<McpConfig>,
         reviewer: Option<ElicitationReviewerHandle>,
         lifecycle: Option<ElicitationLifecycle>,
     ) -> bool {
         let Ok(mut authority) = self.authority.lock() else {
             return false;
         };
-        *authority = ElicitationAuthority {
-            approval_policy,
-            permission_profile,
+        *authority = Some(ElicitationAuthority {
+            config,
             reviewer,
             lifecycle,
-        };
+        });
         true
     }
 
@@ -217,6 +211,14 @@ impl ElicitationRequestManager {
             let server_name = server_name.clone();
             let authority = authority.clone();
             async move {
+                // Activate only once the typed app-server and UI path is available.
+                if matches!(&elicitation, Elicitation::UserVerification { .. }) {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Cancel,
+                        content: None,
+                        meta: None,
+                    });
+                }
                 if router.auto_deny() {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Decline,
@@ -238,7 +240,8 @@ impl ElicitationRequestManager {
                     });
                 }
 
-                let Ok(authority) = authority.lock().map(|authority| authority.clone()) else {
+                let Ok(Some(authority)) = authority.lock().map(|authority| authority.clone())
+                else {
                     return Ok(ElicitationResponse {
                         action: ElicitationAction::Decline,
                         content: None,
@@ -246,11 +249,19 @@ impl ElicitationRequestManager {
                     });
                 };
                 let ElicitationAuthority {
-                    approval_policy,
-                    permission_profile,
+                    config,
                     reviewer,
                     lifecycle,
                 } = authority;
+                let approval_policy = config.approval_policy.value();
+                let Some(permission_profile) = config.permission_profile_for_server(&server_name)
+                else {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Decline,
+                        content: None,
+                        meta: None,
+                    });
+                };
 
                 match elicitation
                     .meta()
@@ -278,8 +289,12 @@ impl ElicitationRequestManager {
                                 .await
                             {
                                 Ok(Some(response))
-                                    if response.action == ElicitationAction::Accept
+                                    if (response.action == ElicitationAction::Accept
                                         && response.content == Some(serde_json::json!({}))
+                                        || matches!(
+                                            response.action,
+                                            ElicitationAction::Decline | ElicitationAction::Cancel
+                                        ) && response.content.is_none())
                                         && response
                                             .meta
                                             .as_ref()
@@ -300,7 +315,7 @@ impl ElicitationRequestManager {
 
                 let permission_prompt_is_auto_approved = mcp_permission_prompt_is_auto_approved(
                     approval_policy,
-                    &permission_profile,
+                    permission_profile,
                     McpPermissionPromptAutoApproveContext::default(),
                 );
                 if permission_prompt_is_auto_approved && can_auto_accept_elicitation(&elicitation) {
@@ -313,19 +328,26 @@ impl ElicitationRequestManager {
 
                 let should_surface_form_in_full_access = router.full_access_form_input_enabled()
                     && permission_prompt_is_auto_approved
-                    && matches!(
-                        &elicitation,
+                    && !elicitation
+                        .meta()
+                        .is_some_and(|meta| meta.contains_key(APPROVAL_KIND_KEY))
+                    && match &elicitation {
                         Elicitation::Mcp(
                             rmcp::model::ElicitRequestParams::FormElicitationParams {
-                                meta,
                                 requested_schema,
                                 ..
-                            }
-                        ) if !requested_schema.properties.is_empty()
-                            && !meta
-                                .as_ref()
-                                .is_some_and(|meta| meta.contains_key(APPROVAL_KIND_KEY))
-                    );
+                            },
+                        ) => !requested_schema.properties.is_empty(),
+                        Elicitation::OpenAiElicitationForm {
+                            requested_schema, ..
+                        } => requested_schema
+                            .get("properties")
+                            .and_then(Value::as_object)
+                            .is_some_and(|properties| !properties.is_empty()),
+                        Elicitation::Mcp(_)
+                        | Elicitation::OpenAiForm { .. }
+                        | Elicitation::UserVerification { .. } => false,
+                    };
 
                 if !should_surface_form_in_full_access {
                     if elicitation_is_rejected_by_policy(approval_policy) {
@@ -362,6 +384,13 @@ impl ElicitationRequestManager {
                 );
                 let routed_request_id = RequestId::String(public_request_id.clone().into());
                 let request = match elicitation {
+                    Elicitation::UserVerification { .. } => {
+                        return Ok(ElicitationResponse {
+                            action: ElicitationAction::Cancel,
+                            content: None,
+                            meta: None,
+                        });
+                    }
                     Elicitation::Mcp(rmcp::model::ElicitRequestParams::FormElicitationParams {
                         meta,
                         message,
@@ -401,6 +430,15 @@ impl ElicitationRequestManager {
                         message,
                         requested_schema,
                     } => ElicitationRequest::OpenAiForm {
+                        meta,
+                        message,
+                        requested_schema,
+                    },
+                    Elicitation::OpenAiElicitationForm {
+                        meta,
+                        message,
+                        requested_schema,
+                    } => ElicitationRequest::OpenAiElicitationForm {
                         meta,
                         message,
                         requested_schema,
@@ -468,7 +506,10 @@ fn can_auto_accept_elicitation(elicitation: &Elicitation) -> bool {
             // Auto-accept confirm/approval elicitations without schema requirements.
             requested_schema.properties.is_empty()
         }
-        Elicitation::Mcp(_) | Elicitation::OpenAiForm { .. } => false,
+        Elicitation::Mcp(_)
+        | Elicitation::OpenAiForm { .. }
+        | Elicitation::OpenAiElicitationForm { .. }
+        | Elicitation::UserVerification { .. } => false,
     }
 }
 

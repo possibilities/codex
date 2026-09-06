@@ -31,7 +31,12 @@ use std::io;
 use std::path::Path;
 
 #[cfg(target_os = "windows")]
-const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USERPROFILE"];
+const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &[
+    "USERNAME",
+    "USERPROFILE",
+    // ShellExecuteExW needs SystemRoot to elevate the setup helper.
+    "SYSTEMROOT",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SandboxType {
@@ -119,6 +124,8 @@ pub struct SandboxExecRequest {
     pub network: Option<NetworkProxy>,
     pub network_environment_id: Option<String>,
     pub sandbox: SandboxType,
+    // TODO(anp): Reconcile these backend copies with the supplied sandbox context
+    // (TurnEnvironment::sandbox_context for turns), preserving this launch snapshot.
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub permission_profile: PermissionProfile,
@@ -139,6 +146,8 @@ pub struct SandboxTransformRequest<'a> {
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a PathUri,
     pub codex_linux_sandbox_exe: Option<&'a Path>,
+    // TODO(anp): Reconcile these backend inputs with the supplied sandbox context
+    // (TurnEnvironment::sandbox_context for turns) so selection shares its authority.
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -207,6 +216,8 @@ pub enum SandboxTransformError {
     },
     MissingLinuxSandboxExecutable,
     EnvironmentNetworkProxy(String),
+    #[cfg(target_os = "macos")]
+    SeatbeltPreparation(String),
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -234,6 +245,10 @@ impl std::fmt::Display for SandboxTransformError {
             Self::EnvironmentNetworkProxy(err) => {
                 write!(f, "failed to prepare environment network proxy: {err}")
             }
+            #[cfg(target_os = "macos")]
+            Self::SeatbeltPreparation(err) => {
+                write!(f, "failed to prepare Seatbelt sandbox: {err}")
+            }
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -253,6 +268,8 @@ impl std::error::Error for SandboxTransformError {
             | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
             Self::MissingLinuxSandboxExecutable => None,
             Self::EnvironmentNetworkProxy(_) => None,
+            #[cfg(target_os = "macos")]
+            Self::SeatbeltPreparation(_) => None,
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => None,
             #[cfg(not(target_os = "macos"))]
@@ -263,10 +280,12 @@ impl std::error::Error for SandboxTransformError {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SandboxManager {
     #[cfg(target_os = "macos")]
     seatbelt_profile: MacosSeatbeltProfile,
+    #[cfg(target_os = "macos")]
+    allowed_symlinked_codex_home: Option<AbsolutePathBuf>,
 }
 
 impl SandboxManager {
@@ -279,7 +298,20 @@ impl SandboxManager {
         Self {
             #[cfg(target_os = "macos")]
             seatbelt_profile: MacosSeatbeltProfile::FileSystemHelper,
+            #[cfg(target_os = "macos")]
+            allowed_symlinked_codex_home: None,
         }
+    }
+
+    /// Allows otherwise-authorized writable roots beneath the opted-in user home
+    /// to follow symlinks, including targets outside that home.
+    #[cfg(target_os = "macos")]
+    pub fn with_allowed_symlinked_codex_home(
+        mut self,
+        allowed_symlinked_codex_home: Option<AbsolutePathBuf>,
+    ) -> Self {
+        self.allowed_symlinked_codex_home = allowed_symlinked_codex_home;
+        self
     }
 
     pub fn select_initial(
@@ -289,6 +321,9 @@ impl SandboxManager {
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
     ) -> SandboxType {
+        #[cfg(windows)]
+        crate::windows_mxc::record_availability_once();
+
         if self.should_sandbox(permission_profile, pref, has_managed_network_requirements) {
             get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
                 .unwrap_or(SandboxType::None)
@@ -360,6 +395,7 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 use crate::seatbelt::CreateSeatbeltCommandArgsParams;
                 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+                use crate::seatbelt::SeatbeltPreparationError;
                 use crate::seatbelt::create_seatbelt_command_args_with_profile;
 
                 let pending = pending_sandboxed_request?;
@@ -379,8 +415,16 @@ impl SandboxManager {
                         extra_allow_unix_sockets: &[],
                     },
                     self.seatbelt_profile,
+                    self.allowed_symlinked_codex_home.as_ref(),
                 )
-                .map_err(SandboxTransformError::EnvironmentNetworkProxy)?;
+                .map_err(|err| match err {
+                    SeatbeltPreparationError::FileSystem(message) => {
+                        SandboxTransformError::SeatbeltPreparation(message)
+                    }
+                    SeatbeltPreparationError::EnvironmentNetworkProxy(message) => {
+                        SandboxTransformError::EnvironmentNetworkProxy(message)
+                    }
+                })?;
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);
@@ -428,11 +472,22 @@ impl SandboxManager {
                             .to_string(),
                     ));
                 }
-                (
-                    os_argv_to_strings(argv),
-                    None,
-                    Some(pending_sandboxed_request?),
-                )
+                let pending = pending_sandboxed_request?;
+                if let Some(metrics) = codex_otel::global() {
+                    let _ = metrics.counter(
+                        "codex.windows_sandbox.private_desktop",
+                        /*inc*/ 1,
+                        &[(
+                            "enabled",
+                            if windows_sandbox_private_desktop {
+                                "true"
+                            } else {
+                                "false"
+                            },
+                        )],
+                    );
+                }
+                (os_argv_to_strings(argv), None, Some(pending))
             }
             #[cfg(not(target_os = "windows"))]
             SandboxType::WindowsRestrictedToken => (
@@ -663,11 +718,13 @@ fn compatibility_workspace_write_policy(
         .and_then(|tmpdir| {
             AbsolutePathBuf::from_absolute_path(std::path::PathBuf::from(tmpdir)).ok()
         })
-        .is_some_and(|tmpdir| file_system_policy.can_write_path_with_cwd(tmpdir.as_path(), cwd));
+        .is_some_and(|tmpdir| {
+            file_system_policy.can_write_local_path_with_cwd(tmpdir.as_path(), cwd)
+        });
     let slash_tmp = Path::new("/tmp");
     let slash_tmp_writable = slash_tmp.is_absolute()
         && slash_tmp.is_dir()
-        && file_system_policy.can_write_path_with_cwd(slash_tmp, cwd);
+        && file_system_policy.can_write_local_path_with_cwd(slash_tmp, cwd);
 
     SandboxPolicy::WorkspaceWrite {
         writable_roots,
