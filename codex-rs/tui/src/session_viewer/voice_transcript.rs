@@ -11,10 +11,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::history_cell::AgentMarkdownCell;
-use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::new_user_prompt;
 use crate::thread_transcript::TranscriptCells;
-use ratatui::style::Stylize;
 
 const MAX_LINE: usize = 1 << 20;
 const MAX_TEXT: usize = 256 * 1024;
@@ -97,14 +95,6 @@ impl Transcript {
         match kind {
             "recording.started" | "recording.ended" | "recording.gap" => {
                 self.interrupt();
-                let reason = record["reason"]
-                    .as_str()
-                    .unwrap_or("recording started; earlier speech may be missing");
-                self.push(Message {
-                    role: Some("notice".into()),
-                    text: format!("[Voice recording: {reason}]"),
-                    status: Status::Complete,
-                })?;
             }
             "event" => {
                 if record["v"] != 2 {
@@ -242,8 +232,6 @@ impl Transcript {
             let cell: Arc<dyn crate::history_cell::HistoryCell> =
                 if message.role.as_deref() == Some("user") {
                     Arc::new(new_user_prompt(text, vec![], vec![], vec![]))
-                } else if message.role.as_deref() == Some("notice") {
-                    Arc::new(PlainHistoryCell::new(vec![text.dim().into()]))
                 } else {
                     Arc::new(AgentMarkdownCell::new_with_inline_visualizations(
                         text,
@@ -297,10 +285,6 @@ impl VoiceFile {
             line: 0,
             transcript: Transcript::default(),
         })
-    }
-
-    pub fn partial_tail(&self) -> bool {
-        !self.pending.is_empty()
     }
 
     pub fn refresh(&mut self) -> io::Result<bool> {

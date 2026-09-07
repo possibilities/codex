@@ -6,11 +6,6 @@ use std::time::Duration;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
 use tokio_stream::StreamExt;
 
 use super::SessionViewerOptions;
@@ -85,33 +80,25 @@ async fn run_loop(
     let mut dirty = true;
     loop {
         if dirty {
-            let status = if source.partial_tail() {
-                "Voice · incomplete JSONL tail · q / Ctrl+C quit"
-            } else if follow {
-                "Voice · following recording · q / Ctrl+C quit"
-            } else {
-                "Voice · saved recording · q / Ctrl+C quit"
-            };
             tui.draw(u16::MAX, |frame| {
-                render(viewport, status, frame.area(), frame.buffer);
+                viewport.render(frame.area(), frame.buffer);
             })?;
             dirty = false;
         }
         tokio::select! {
             _ = tick.tick() => {
                 if follow || !loaded {
-                    let partial = source.partial_tail();
                     let changed = source.refresh()?;
                     loaded = source.caught_up()?;
                     if loaded && !follow { source.transcript.interrupt(); }
                     if changed || !follow { viewport.replace_cells(source.transcript.cells()); }
-                    dirty = changed || !follow || partial != source.partial_tail();
+                    dirty = changed || !follow;
                 }
             }
             event = events.next() => match event {
                 Some(TuiEvent::Key(key)) => {
-                    if (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && key.kind != KeyEventKind::Release)
-                        || viewport.handle_key(key) { break; }
+                    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && key.kind != KeyEventKind::Release { break; }
+                    viewport.handle_key(key);
                     dirty = true;
                 }
                 Some(TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume) => dirty = true,
@@ -121,23 +108,4 @@ async fn run_loop(
         }
     }
     Ok(())
-}
-
-pub(super) fn render(
-    viewport: &mut ConversationViewport,
-    status: &str,
-    area: Rect,
-    buffer: &mut Buffer,
-) {
-    let content = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-    viewport.render(content, buffer);
-    Paragraph::new(status.dim()).render(
-        Rect::new(
-            area.x,
-            area.bottom().saturating_sub(1),
-            area.width,
-            u16::from(area.height > 0),
-        ),
-        buffer,
-    );
 }

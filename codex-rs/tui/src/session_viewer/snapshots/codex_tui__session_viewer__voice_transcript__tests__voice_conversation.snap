@@ -1,6 +1,6 @@
 ---
 source: tui/src/session_viewer/voice_transcript_tests.rs
-assertion_line: 206
+assertion_line: 201
 expression: "rows.join(\"\\n\")"
 ---
 
@@ -12,7 +12,3 @@ expression: "rows.join(\"\\n\")"
 
 › And follow it live
   [Incomplete recording]
-
-
-[Voice recording: disconnected]
-Voice · saved recording · q / Ctrl+C quit

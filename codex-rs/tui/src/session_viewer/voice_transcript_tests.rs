@@ -116,7 +116,7 @@ fn unknown_speaker_waits_for_completion_and_gap_marks_incomplete() {
         json!({"type":"recording.gap","reason":"runtime_unavailable"}),
     );
     assert_eq!(transcript.messages[1].status, Status::Incomplete);
-    assert_eq!(transcript.cells().len(), 3);
+    assert_eq!(transcript.cells().len(), 2);
 }
 #[test]
 fn follows_split_utf8_and_refuses_truncation_and_invalid_lines() {
@@ -131,7 +131,6 @@ fn follows_split_utf8_and_refuses_truncation_and_invalid_lines() {
     let split = record.find('雪').unwrap() + 1;
     file.write_all(&record.as_bytes()[..split]).unwrap();
     assert!(!source.refresh().unwrap());
-    assert!(source.partial_tail());
     file.write_all(&record.as_bytes()[split..]).unwrap();
     assert!(source.refresh().unwrap());
     assert_eq!(source.transcript.messages[0].text, "雪");
@@ -149,6 +148,7 @@ fn follows_split_utf8_and_refuses_truncation_and_invalid_lines() {
 fn voice_cells_snapshot() {
     let mut transcript = Transcript::default();
     feed(&mut transcript, header());
+    feed(&mut transcript, json!({"type":"recording.started"}));
     feed(
         &mut transcript,
         event(
@@ -188,12 +188,7 @@ fn voice_cells_snapshot() {
         super::super::viewport::ConversationViewport::new(transcript.cells(), keymap);
     let area = ratatui::layout::Rect::new(0, 0, 58, 13);
     let mut buffer = ratatui::buffer::Buffer::empty(area);
-    super::super::voice_viewer::render(
-        &mut viewport,
-        "Voice · saved recording · q / Ctrl+C quit",
-        area,
-        &mut buffer,
-    );
+    viewport.render(area, &mut buffer);
     let rows: Vec<String> = (0..area.height)
         .map(|y| {
             (0..area.width)
