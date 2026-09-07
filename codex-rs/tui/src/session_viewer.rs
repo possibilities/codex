@@ -176,14 +176,14 @@ pub(crate) async fn run_app(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    app_server_target: AppServerTarget,
+    mut app_server_target: AppServerTarget,
     remote_cwd_override: Option<std::path::PathBuf>,
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     cloud_config_bundle: CloudConfigBundleLoader,
     feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
-    state_db: Option<StateDbHandle>,
+    mut state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
     startup_draft: crate::startup_draft::StartupDraft,
 ) -> Result<AppExitInfo> {
@@ -201,7 +201,7 @@ pub(crate) async fn run_app(
         .run_until(
             &mut tui,
             crate::start_app_server(
-                &app_server_target,
+                &mut app_server_target,
                 arg0_paths,
                 config.clone(),
                 cli_kv_overrides,
@@ -210,13 +210,13 @@ pub(crate) async fn run_app(
                 cloud_config_bundle,
                 feedback,
                 log_db,
-                state_db,
+                &mut state_db,
                 environment_manager,
             ),
         )
         .await??;
     let mut app_server = AppServerSession::new(app_server, app_server_target.thread_params_mode())
-        .with_startup_config(&config)
+        .with_local_codex_home(&config.codex_home)
         .with_remote_cwd_override(remote_cwd_override);
     let loaded = startup_draft
         .run_until(&mut tui, load_initial_thread(&mut app_server, thread_id))
@@ -332,6 +332,7 @@ pub(crate) async fn run_app(
         resume_hint: None,
         update_action: None,
         exit_reason: ExitReason::UserRequested,
+        disconnect_info: None,
     })
 }
 

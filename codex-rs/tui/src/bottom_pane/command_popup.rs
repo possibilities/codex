@@ -429,7 +429,12 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        insta::assert_snapshot!("command_popup_default_items", commands);
+        let snapshot = if cfg!(debug_assertions) {
+            "command_popup_default_items"
+        } else {
+            "command_popup_default_items_release"
+        };
+        insta::assert_snapshot!(snapshot, commands);
     }
 
     #[test]

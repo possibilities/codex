@@ -207,6 +207,7 @@ impl TurnTranscriptRenderer<'_> {
             item @ (ThreadItem::UserMessage { .. }
             | ThreadItem::HookPrompt { .. }
             | ThreadItem::AgentMessage { .. }
+            | ThreadItem::FunctionCallOutput { .. }
             | ThreadItem::Plan { .. }
             | ThreadItem::Reasoning { .. }
             | ThreadItem::DynamicToolCall { .. }

@@ -173,6 +173,7 @@ async fn turns_list_includes_streaming_assistant_text_in_latest_page() -> Result
             phase: None,
             memory_citation: None,
             delivery: None,
+            questions: None,
         }]
     );
 

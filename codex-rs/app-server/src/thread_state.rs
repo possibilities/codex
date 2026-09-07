@@ -173,6 +173,7 @@ impl ThreadState {
                 phase: None,
                 memory_citation: None,
                 delivery: None,
+                questions: None,
             };
             if let Some(existing) = turn.items.iter_mut().find(|item| item.id() == item_id) {
                 *existing = item;

@@ -164,6 +164,7 @@ fn turn(id: &str, text: &str) -> Turn {
             phase: None,
             memory_citation: None,
             delivery: None,
+            questions: None,
         }],
         items_view: TurnItemsView::Full,
         status: TurnStatus::InProgress,
@@ -263,6 +264,7 @@ async fn renders_native_markdown_command_and_file_change_cells() {
                 phase: Some(codex_protocol::models::MessagePhase::FinalAnswer),
                 memory_citation: None,
                 delivery: None,
+                questions: None,
             },
         ],
         items_view: TurnItemsView::Full,
@@ -274,6 +276,11 @@ async fn renders_native_markdown_command_and_file_change_cells() {
     };
     let thread = Thread {
         id: thread_id.clone(),
+        environments: None,
+        model: None,
+        reasoning_effort: None,
+        originator: None,
+        daybreak_enabled: None,
         extra: None,
         session_id: thread_id,
         forked_from_id: None,
@@ -356,6 +363,7 @@ async fn renders_native_markdown_command_and_file_change_cells() {
         phase: Some(codex_protocol::models::MessagePhase::Commentary),
         memory_citation: None,
         delivery: None,
+        questions: None,
     });
     assert!(backfilled_viewer.merge_latest_turn(newer_turn.clone()));
     backfilled_viewer.rollout_offset = 2;
@@ -519,6 +527,7 @@ async fn local_rollout_watcher_only_reloads_changed_files() {
         phase: None,
         memory_citation: None,
         delivery: None,
+        questions: None,
     }));
     let updated_items = vec![turn_started, user_message, agent_message];
     write_rollout(&path, updated_items.clone());
@@ -590,6 +599,7 @@ async fn local_rollout_watcher_seeds_from_only_the_latest_turn() {
         phase: None,
         memory_citation: None,
         delivery: None,
+        questions: None,
     }));
     let mut updated_items = initial_items;
     updated_items.push(agent_message.clone());
@@ -637,6 +647,7 @@ async fn local_rollout_watcher_bounds_the_initial_active_turn() {
                 phase: None,
                 memory_citation: None,
                 delivery: None,
+                questions: None,
             }))
         }),
     );
@@ -690,6 +701,7 @@ async fn paginated_rollout_watcher_projects_appended_agent_messages() {
             phase: Some(codex_protocol::models::MessagePhase::Commentary),
             memory_citation: None,
             delivery: None,
+            questions: None,
         });
     let completed = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
         thread_id,
@@ -720,6 +732,7 @@ async fn paginated_rollout_watcher_projects_appended_agent_messages() {
             phase: Some(codex_protocol::models::MessagePhase::Commentary),
             memory_citation: None,
             delivery: None,
+            questions: None,
         }]
     );
 }

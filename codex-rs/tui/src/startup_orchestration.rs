@@ -618,7 +618,6 @@ pub(super) async fn run_main_inner(
             log_db,
             state_db,
             environment_manager,
-            managed_worktree.clone(),
             startup_draft,
         )
         .await
