@@ -250,10 +250,7 @@ impl Transcript {
         self.cells
             .iter()
             .zip(&self.messages)
-            .filter(|(_, message)| {
-                message.role.is_some()
-                    && (!message.text.trim().is_empty() || message.status != Status::Complete)
-            })
+            .filter(|(_, message)| message.role.is_some() && !message.text.trim().is_empty())
             .map(|(cell, _)| cell.clone())
             .collect()
     }

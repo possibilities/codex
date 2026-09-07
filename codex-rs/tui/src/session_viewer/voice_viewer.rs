@@ -6,6 +6,11 @@ use std::time::Duration;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use tokio_stream::StreamExt;
 
 use super::SessionViewerOptions;
@@ -81,7 +86,7 @@ async fn run_loop(
     loop {
         if dirty {
             tui.draw(u16::MAX, |frame| {
-                viewport.render(frame.area(), frame.buffer);
+                render(viewport, frame.area(), frame.buffer);
             })?;
             dirty = false;
         }
@@ -108,4 +113,19 @@ async fn run_loop(
         }
     }
     Ok(())
+}
+
+pub(super) fn render(viewport: &mut ConversationViewport, area: Rect, buffer: &mut Buffer) {
+    viewport.render(area, buffer);
+    if viewport.cells.is_empty() {
+        let placeholder = Rect::new(
+            area.x,
+            area.y.saturating_add(area.height.saturating_sub(1) / 2),
+            area.width,
+            u16::from(area.height > 0),
+        );
+        Paragraph::new("Waiting for voice messages…".dim())
+            .centered()
+            .render(placeholder, buffer);
+    }
 }

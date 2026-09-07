@@ -1,0 +1,22 @@
+---
+source: tui/src/session_viewer/voice_transcript_tests.rs
+assertion_line: 229
+expression: buffer
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 7 },
+    content: [
+        "                                        ",
+        "                                        ",
+        "                                        ",
+        "       Waiting for voice messages…      ",
+        "                                        ",
+        "                                        ",
+        "                                        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 7, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 34, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

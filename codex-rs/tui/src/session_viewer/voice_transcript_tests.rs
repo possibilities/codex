@@ -188,7 +188,7 @@ fn voice_cells_snapshot() {
         super::super::viewport::ConversationViewport::new(transcript.cells(), keymap);
     let area = ratatui::layout::Rect::new(0, 0, 58, 13);
     let mut buffer = ratatui::buffer::Buffer::empty(area);
-    viewport.render(area, &mut buffer);
+    super::super::voice_viewer::render(&mut viewport, area, &mut buffer);
     let rows: Vec<String> = (0..area.height)
         .map(|y| {
             (0..area.width)
@@ -199,6 +199,42 @@ fn voice_cells_snapshot() {
         })
         .collect();
     insta::assert_snapshot!("voice_conversation", rows.join("\n"));
+}
+
+#[test]
+fn empty_voice_placeholder_until_speaker_text_arrives() {
+    let mut transcript = Transcript::default();
+    feed(&mut transcript, header());
+    feed(&mut transcript, json!({"type":"recording.started"}));
+    feed(
+        &mut transcript,
+        event("voice.item.started", 1, item("a", "user", "  ")),
+    );
+    feed(
+        &mut transcript,
+        event(
+            "voice.item.transcript.delta",
+            1,
+            item("b", "assistant", "unknown"),
+        ),
+    );
+    let keymap = crate::keymap::RuntimeKeymap::from_config(&Default::default())
+        .unwrap()
+        .pager;
+    let mut viewport =
+        super::super::viewport::ConversationViewport::new(transcript.cells(), keymap);
+    let area = ratatui::layout::Rect::new(0, 0, 40, 7);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    super::super::voice_viewer::render(&mut viewport, area, &mut buffer);
+    insta::assert_debug_snapshot!("voice_empty", buffer);
+
+    feed(
+        &mut transcript,
+        event("voice.item.transcript.delta", 1, item("a", "user", "Hello")),
+    );
+    viewport.replace_cells(transcript.cells());
+    super::super::voice_viewer::render(&mut viewport, area, &mut buffer);
+    insta::assert_debug_snapshot!("voice_first_message", buffer);
 }
 
 #[test]
