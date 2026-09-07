@@ -1,0 +1,18 @@
+---
+source: tui/src/session_viewer/voice_transcript_tests.rs
+assertion_line: 206
+expression: "rows.join(\"\\n\")"
+---
+
+› Can we save this conversation?
+
+
+• Yes. The voice recording stays in your JSONL file.
+
+
+› And follow it live
+  [Incomplete recording]
+
+
+[Voice recording: disconnected]
+Voice · saved recording · q / Ctrl+C quit

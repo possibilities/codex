@@ -50,13 +50,17 @@ mod rollout_watcher;
 mod transcript;
 mod viewer_state;
 mod viewport;
+mod voice_transcript;
+mod voice_viewer;
 
 const LIVE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const ROLLOUT_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub struct SessionViewerOptions {
-    pub session_id: String,
+    pub session_id: Option<String>,
+    pub voice_jsonl: Option<std::path::PathBuf>,
+    pub follow: bool,
     pub no_alt_screen: bool,
     pub config_overrides: CliConfigOverrides,
 }
@@ -67,8 +71,11 @@ pub async fn run_session_viewer(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
 ) -> io::Result<AppExitInfo> {
+    if let Some(path) = options.voice_jsonl.clone() {
+        return voice_viewer::run(path, options).await;
+    }
     let mut cli = crate::Cli::try_parse_from(["codex-viewer"]).map_err(io::Error::other)?;
-    cli.view_session_id = Some(options.session_id);
+    cli.view_session_id = options.session_id;
     cli.no_alt_screen = options.no_alt_screen;
     cli.config_overrides = options.config_overrides;
     crate::run_main(

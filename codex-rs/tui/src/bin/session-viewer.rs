@@ -9,13 +9,25 @@ use codex_tui::SessionViewerOptions;
 use codex_tui::run_session_viewer;
 use codex_utils_cli::CliConfigOverrides;
 
-/// Read-only, conversation-only viewer for a saved Codex session.
+/// Read-only viewer for Codex sessions and AgentVoice recordings.
 #[derive(Debug, Parser)]
 #[command(name = "codex-viewer", version)]
 struct Cli {
     /// Session id (UUID) to display.
-    #[arg(value_name = "SESSION_ID")]
-    session_id: String,
+    #[arg(
+        value_name = "SESSION_ID",
+        required_unless_present = "voice_jsonl",
+        conflicts_with = "voice_jsonl"
+    )]
+    session_id: Option<String>,
+
+    /// Display an explicit AgentVoice JSONL recording without starting app-server.
+    #[arg(long, value_name = "FILE")]
+    voice_jsonl: Option<std::path::PathBuf>,
+
+    /// Watch the voice recording for appended events.
+    #[arg(long, requires = "voice_jsonl", conflicts_with = "session_id")]
+    follow: bool,
 
     /// Disable alternate screen mode and preserve terminal scrollback.
     #[arg(long, default_value_t = false)]
@@ -31,6 +43,8 @@ fn main() -> anyhow::Result<()> {
         let exit_info = run_session_viewer(
             SessionViewerOptions {
                 session_id: cli.session_id,
+                voice_jsonl: cli.voice_jsonl,
+                follow: cli.follow,
                 no_alt_screen: cli.no_alt_screen,
                 config_overrides: cli.config_overrides,
             },
