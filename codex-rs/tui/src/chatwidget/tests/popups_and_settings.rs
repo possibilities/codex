@@ -49,7 +49,6 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
-        runtime_model_provider_base_url: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
@@ -3174,6 +3173,35 @@ async fn experimental_popup_loading_snapshot() {
     assert!(response_tx.send(Ok(Vec::new())).is_err());
     assert!(!chat.has_active_view());
     assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn experimental_popup_available_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_experimental_popup();
+    let AppEvent::FetchExperimentalFeatures { response_tx, .. } = rx.try_recv().unwrap() else {
+        panic!("expected experimental discovery request");
+    };
+    let features = [
+        ("network_proxy", "Network proxy", "Apply network proxy restrictions to sandboxed sessions that already have network access."),
+        ("prevent_idle_sleep", "Prevent sleep while running", "Keep your computer awake while Codex is running a thread."),
+    ]
+    .into_iter()
+    .map(|(name, display_name, description)| codex_app_server_protocol::ExperimentalFeature {
+        name: name.to_string(),
+        stage: codex_app_server_protocol::ExperimentalFeatureStage::Beta,
+        display_name: Some(display_name.to_string()),
+        description: Some(description.to_string()),
+        announcement: None,
+        enabled: false,
+        default_enabled: false,
+    })
+    .collect();
+    response_tx.send(Ok(features)).unwrap();
+    chat.pre_draw_tick();
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("experimental_features_available_popup", popup);
 }
 
 #[tokio::test]

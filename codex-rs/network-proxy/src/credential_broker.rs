@@ -18,6 +18,7 @@ pub(crate) struct CredentialBroker {
 
 #[derive(Default)]
 struct CredentialBrokerState {
+    config_revision: u64,
     enabled: bool,
     openai_api_host: Option<String>,
     credentials: Vec<CredentialRecord>,
@@ -82,6 +83,11 @@ impl CredentialBroker {
 
     pub(crate) fn configure(&self, config: &NetworkProxyConfig) {
         let mut state = self.write_state();
+        if state.enabled != config.credential_broker
+            || state.openai_api_host != config.credential_broker_openai_host
+        {
+            state.config_revision += 1;
+        }
         if state.enabled != config.credential_broker {
             state.enabled = config.credential_broker;
             state.credentials.clear();
@@ -95,6 +101,10 @@ impl CredentialBroker {
                 .credentials
                 .retain(|credential| !credential.provider.reset_on_configuration_change);
         }
+    }
+
+    pub(crate) fn config_revision(&self) -> u64 {
+        self.read_state().config_revision
     }
 
     pub(crate) fn discover_parent_credentials(
@@ -248,6 +258,16 @@ impl CredentialBroker {
                 }
             }
         }
+    }
+
+    pub(crate) fn restore_and_disable_child_env(
+        &self,
+        env: &mut HashMap<String, String>,
+        command: &mut [String],
+    ) {
+        self.restore_child_env(env, command);
+        remove_env_value(env, CREDENTIAL_BROKER_ACTIVE_ENV_KEY);
+        remove_env_value(env, BROKERED_CREDENTIALS_ENV_KEY);
     }
 
     pub(crate) fn host_requires_mitm(&self, host: &str) -> bool {

@@ -87,7 +87,6 @@ use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpProtocolMode;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
-use codex_memories_read::memory_root;
 use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -117,10 +116,12 @@ use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::DenyReadValidator;
+use codex_protocol::permissions::DenyReadViolation;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
@@ -747,6 +748,9 @@ pub struct Config {
 
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
+
+    /// Show a TUI notice when the connected app server is an older stable release.
+    pub tui_show_server_version_notice: bool,
 
     /// Generate automatic TUI recaps. Manual `/recap` remains available when disabled.
     pub tui_auto_recap: bool,
@@ -3425,7 +3429,7 @@ impl Config {
         }
 
         let memories_config: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
-        let memories_root = memory_root(&codex_home);
+        let memories_root = codex_home.join(memories_config.version.directory_name());
 
         let profiles_are_active = effective_permission_selection.profiles_are_active(
             default_permissions_override.as_deref(),
@@ -4099,49 +4103,65 @@ impl Config {
         }) = filesystem_requirements.as_ref()
             && let Some(managed_file_system_policy) = managed_deny_read_policy.as_ref()
         {
-            let managed_deny_matcher =
-                ReadDenyMatcher::try_new_for_local_paths(managed_file_system_policy, resolved_cwd.as_path())
-                    .map_err(std::io::Error::other)?;
-            let managed_file_system_policy = Arc::clone(managed_file_system_policy);
+            let cwd = PathUri::from_abs_path(&resolved_cwd);
+            let user_home_dir = PathUri::from_host_native_path("~").ok();
+            let temporary_directories = std::env::var_os("TMPDIR")
+                .filter(|path| !path.is_empty())
+                .and_then(|path| AbsolutePathBuf::from_absolute_path(PathBuf::from(path)).ok())
+                .map(PathUri::from)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let context = FileSystemSandboxPolicyContext {
+                cwd: &cwd,
+                workspace_roots: std::slice::from_ref(&cwd),
+                user_home_dir: user_home_dir.as_ref(),
+                temporary_directories: Some(&temporary_directories),
+            };
+            let validator = DenyReadValidator::new(managed_file_system_policy, &context)
+                .map_err(std::io::Error::other)?;
             let requirement_source = requirement_source.clone();
             constrained_permission_profile
                 .value
                 .add_validator(move |permission_profile| {
-                    let file_system_policy = permission_profile.file_system_sandbox_policy();
-                    let missing_required_deny = managed_file_system_policy
-                        .entries
-                        .iter()
-                        .any(|entry| !file_system_policy.entries.contains(entry));
-                    let violating_root = file_system_policy
-                        .entries
-                        .iter()
-                        .filter(|entry| entry.access.can_read())
-                        .find_map(|entry| {
-                            let FileSystemPath::Path { path } = &entry.path else {
-                                return None;
+                    let mut file_system_policy = permission_profile.file_system_sandbox_policy();
+                    // Preserve the native conversion boundary before the shared URI checks.
+                    // Mandatory entries are Deny entries, so their identity stays unchanged.
+                    file_system_policy.entries.retain_mut(|entry| {
+                        if entry.access.can_read()
+                            && let FileSystemPath::Path { path } = &mut entry.path
+                        {
+                            let Ok(native_path) = path.to_abs_path() else {
+                                return false;
                             };
-                            let path = path.to_abs_path().ok()?;
-                            managed_deny_matcher
-                                .as_ref()
-                                .is_some_and(|matcher| matcher.is_local_path_read_denied(path.as_path()))
-                                .then_some(path)
-                        });
-                    if missing_required_deny || violating_root.is_some() {
-                        return Err(ConstraintError::InvalidValue {
+                            *path = PathUri::from(native_path);
+                        }
+                        true
+                    });
+                    let context = FileSystemSandboxPolicyContext {
+                        cwd: &cwd,
+                        workspace_roots: std::slice::from_ref(&cwd),
+                        user_home_dir: user_home_dir.as_ref(),
+                        temporary_directories: Some(&temporary_directories),
+                    };
+                    validator.validate(&file_system_policy, &context).map_err(|violation| {
+                        let candidate = match violation {
+                            DenyReadViolation::MissingRequiredDeny => "missing managed deny".to_string(),
+                            DenyReadViolation::ReadablePath(path) => path.to_abs_path().map_or_else(
+                                |_| path.to_string(),
+                                |path| path.to_string_lossy().into_owned(),
+                            ),
+                        };
+                        ConstraintError::InvalidValue {
                             field_name: "permissions.filesystem",
-                            candidate: violating_root
-                                .map_or_else(|| "missing managed deny".to_string(), |path| {
-                                    path.to_string_lossy().into_owned()
-                                }),
+                            candidate,
                             allowed: "all managed deny_read restrictions".to_string(),
                             requirement_source: requirement_source.clone(),
-                        });
-                    }
-
-                    Ok(())
+                        }
+                    })
                 })
                 .map_err(std::io::Error::from)?;
         }
+
         let permission_profile_state = PermissionProfileState::from_constrained_active_profile(
             constrained_permission_profile.value,
             active_permission_profile,
@@ -4354,6 +4374,11 @@ impl Config {
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             tui_whimsy: cfg.tui.as_ref().map(|t| t.whimsy).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_show_server_version_notice: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.show_server_version_notice)
+                .unwrap_or(true),
             tui_auto_recap: cfg.tui.as_ref().map(|t| t.auto_recap).unwrap_or(/*default*/ true),
             model_availability_nux: cfg
                 .tui

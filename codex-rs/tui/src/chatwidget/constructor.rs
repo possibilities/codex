@@ -26,7 +26,6 @@ impl ChatWidget {
             feedback,
             is_first_run,
             status_account_display,
-            runtime_model_provider_base_url,
             initial_plan_type,
             model,
             startup_tooltip_override,
@@ -134,7 +133,6 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             status_account_display,
-            runtime_model_provider_base_url,
             remote_connection: None,
             local_worktree_operations: true,
             token_info: None,
@@ -177,6 +175,8 @@ impl ChatWidget {
             last_unified_wait: None,
             unified_exec_wait_streak: None,
             turn_lifecycle: TurnLifecycleState::new(prevent_idle_sleep),
+            realtime_conversation: RealtimeConversationUiState::default(),
+            realtime_conversation_available_for_thread: false,
             safety_buffering: SafetyBufferingState::default(),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
@@ -293,6 +293,9 @@ impl ChatWidget {
         widget.sync_worktrees_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget
+            .bottom_pane
+            .set_voice_command_enabled(/*enabled*/ false);
         widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane

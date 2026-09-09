@@ -1,4 +1,64 @@
 use super::*;
+
+#[tokio::test]
+async fn older_server_notice_is_visible_in_agents_overview() {
+    let mut app = make_test_app().await;
+    app.update_server_version_overview_notice("0.153.0", Some("0.152.1"));
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    insta::assert_snapshot!(rendered.lines().take(2).collect::<Vec<_>>().join("\n"));
+}
+
+#[tokio::test]
+async fn server_version_overview_notice_updates_and_clears() {
+    let mut app = make_test_app().await;
+    app.update_server_version_overview_notice("0.153.0", Some("0.152.1"));
+    app.update_server_version_overview_notice("0.153.0", Some("0.151.0"));
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    insta::assert_snapshot!(rendered.lines().take(2).collect::<Vec<_>>().join("\n"), @"  Service v0.151.0 < Codex CLI v0.153.0
+  0 need input   0 working   0 ready");
+
+    app.update_server_version_overview_notice("0.153.0", /*older_server*/ None);
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    insta::assert_snapshot!(rendered.lines().take(2).collect::<Vec<_>>().join("\n"), @"  Agent command center
+  0 need input   0 working   0 ready");
+}
+
+#[tokio::test]
+async fn older_server_notice_wraps_in_narrow_overview() {
+    let mut app = make_test_app().await;
+    app.update_server_version_overview_notice("0.153.0", Some("0.152.1"));
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    insta::assert_snapshot!(
+        "older_server_narrow_overview",
+        render_bottom_popup(&app.chat_widget, /*width*/ 12)
+    );
+}
+
+#[tokio::test]
+async fn older_server_notice_falls_back_in_short_overview() {
+    let mut app = make_test_app().await;
+    app.update_server_version_overview_notice("0.153.0", Some("0.152.1"));
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    let area = ratatui::layout::Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 8,
+    );
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    view.render(area, &mut buffer);
+    let header = buffer
+        .content()
+        .iter()
+        .take(usize::from(area.width))
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    insta::assert_snapshot!(header.trim_end(), @"  Old srv");
+}
 use crate::app::test_support::make_test_app;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::bottom_pane::BottomPaneView;
@@ -85,7 +145,7 @@ async fn overview_composer_preserves_editing_and_routes_focus() {
     view.handle_key_event(KeyCode::Esc.into());
     view.handle_key_event(KeyCode::Tab.into());
     assert!(
-        matches!(rx.try_recv(), Ok(AppEvent::DispatchAgentsOverviewTask { prompt, .. }) if prompt == expected.0)
+        matches!(rx.try_recv(), Ok(AppEvent::DispatchAgentsOverviewTask { prompt, .. }) if prompt.text == expected.0)
     );
     view.handle_key_event(KeyCode::Up.into());
     assert_eq!(overview_draft(&app).0, expected.0);
@@ -101,7 +161,7 @@ async fn overview_composer_preserves_editing_and_routes_focus() {
     app.dispatch_agents_overview_task(&mut server, "retry me".into(), Some(app.config.cwd.clone()))
         .await;
     view.handle_paste(" later".into());
-    app.submit_agents_overview_prompt(&server, thread_id, "older failure".into())
+    app.submit_agents_overview_prompt(&server, thread_id, "older failure".into(), Vec::new())
         .await;
     assert_eq!(overview_draft(&app).0, "retry me later");
     server.shutdown().await.unwrap();
@@ -162,7 +222,7 @@ async fn overview_composer_preserves_pastes_and_editor_bindings() {
     view.handle_key_event(KeyCode::Char('x').into());
     view.handle_key_event(KeyCode::F(8).into());
     assert!(
-        matches!(rx.try_recv(), Ok(AppEvent::DispatchAgentsOverviewTask { prompt, .. }) if prompt == format!("{pasted}\nabcxlast line"))
+        matches!(rx.try_recv(), Ok(AppEvent::DispatchAgentsOverviewTask { prompt, .. }) if prompt.text == format!("{pasted}\nabcxlast line"))
     );
 }
 
@@ -1034,7 +1094,7 @@ async fn shared_overview_shows_only_root_sessions() {
     assert!(matches!(
         event_rx.try_recv(),
         Ok(AppEvent::DispatchAgentsOverviewTask { prompt, cwd: None })
-            if prompt == "Use the current project"
+            if prompt.text == "Use the current project"
     ));
     action_view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     action_view.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
@@ -1054,7 +1114,7 @@ async fn shared_overview_shows_only_root_sessions() {
     assert!(matches!(
         event_rx.try_recv(),
         Ok(AppEvent::DispatchAgentsOverviewTask { prompt, cwd: Some(cwd) })
-            if prompt == "Fix the flaky tests after all retries complete"
+            if prompt.text == "Fix the flaky tests after all retries complete"
                 && cwd == test_path_buf("/tmp/project").abs()
     ));
     assert!(action_view.handle_paste("   ".to_string()));
@@ -1071,7 +1131,7 @@ async fn shared_overview_shows_only_root_sessions() {
     assert!(matches!(
         event_rx.try_recv(),
         Ok(AppEvent::DispatchAgentsOverviewTask { prompt, .. })
-            if prompt.trim() == "Continue working"
+            if prompt.text.trim() == "Continue working"
     ));
     action_view.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     action_view.handle_paste("First line\nSecond line".into());
@@ -1849,6 +1909,7 @@ async fn resuming_active_session_closes_command_center() -> Result<()> {
             SessionSelection::Resume(SessionTarget {
                 path: None,
                 thread_id,
+                cwd: None,
                 history_mode: None,
             })
         )
@@ -1907,6 +1968,7 @@ async fn resume_picker_round_trip_preserves_each_threads_input() -> Result<()> {
                 &id,
             )),
             thread_id: ThreadId::from_string(&id)?,
+            cwd: None,
             history_mode: None,
         });
     }
@@ -2006,6 +2068,7 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
             SessionSelection::Resume(SessionTarget {
                 path: None,
                 thread_id: ThreadId::new(),
+                cwd: None,
                 history_mode: None,
             })
         )
@@ -2029,6 +2092,7 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
             SessionSelection::Resume(SessionTarget {
                 path: Some(path),
                 thread_id,
+                cwd: None,
                 history_mode: None,
             })
         )

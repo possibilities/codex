@@ -1,3 +1,4 @@
+use crate::context::GuardianContextMode;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,6 +17,7 @@ use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
+use crate::session::RequestEffortUsage;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
@@ -32,7 +34,6 @@ use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::set_annotated_content;
-use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
@@ -357,7 +358,7 @@ async fn run_compact_task_inner_impl(
     let summary_suffix =
         get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let identity = if sess.enabled(Feature::GuardianThreadContext) {
+    let identity = if sess.guardian_context_mode == GuardianContextMode::ThreadOwned {
         CompactedMessageIdentity::Preserve
     } else {
         CompactedMessageIdentity::Regenerate
@@ -380,8 +381,8 @@ async fn run_compact_task_inner_impl(
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage { .. } => {
-            Some(turn_context.to_turn_context_item())
+        InitialContextInjection::BeforeLastUserMessage { step_context, .. } => {
+            Some(step_context.to_turn_context_item())
         }
     };
     sess.replace_compacted_history(
@@ -771,7 +772,11 @@ async fn drain_to_completed(
             prompt,
             turn_context.model_info(),
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort().cloned(),
+            sess.reasoning_effort_for_request(
+                &turn_context.initial_settings,
+                RequestEffortUsage::Compaction,
+            )
+            .await,
             turn_context.reasoning_summary(),
             turn_context.config.service_tier.clone(),
             responses_metadata,

@@ -546,6 +546,13 @@ client_request_definitions! {
         response: v2::UserVerificationVerifyResponse,
     },
 
+    #[experimental("userVerification/cancel")]
+    UserVerificationCancel => "userVerification/cancel" {
+        params: v2::UserVerificationCancelParams,
+        serialization: None,
+        response: v2::UserVerificationCancelResponse,
+    },
+
     /// NEW APIs
     // Thread lifecycle
     // Uses `inspect_params` because only some fields are experimental.
@@ -680,6 +687,12 @@ client_request_definitions! {
         params: v2::ThreadMemoryModeSetParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMemoryModeSetResponse,
+    },
+    #[experimental("memory/status")]
+    MemoryStatus => "memory/status" {
+        params: v2::MemoryStatusParams,
+        serialization: global("memory"),
+        response: v2::MemoryStatusResponse,
     },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {

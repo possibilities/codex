@@ -1,3 +1,4 @@
+use crate::context::GuardianContextMode;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -45,6 +46,7 @@ use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::step_settings::StepSettings;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
+use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::skills_load_input_from_config;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::turn_metadata::TurnMetadataState;
@@ -223,6 +225,8 @@ mod environment;
 pub(crate) mod extension_metrics;
 mod handlers;
 mod inject;
+mod reasoning_effort;
+pub(crate) use reasoning_effort::RequestEffortUsage;
 mod input_queue;
 mod mcp;
 mod mcp_prewarm;
@@ -230,7 +234,6 @@ mod mcp_refresh;
 mod mcp_runtime;
 pub(crate) mod multi_agents;
 mod realtime_history;
-mod reasoning_effort;
 mod retained_context;
 mod review;
 mod rollout_budget;
@@ -298,6 +301,7 @@ use crate::state::AcceptedUserInputResponse;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
+use crate::state::ReasoningEffortPin;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -763,6 +767,7 @@ impl Session {
             windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
             use_legacy_landlock: config.features.use_legacy_landlock(),
             legacy_fallback_cwd: config.cwd.clone(),
+            runtime_workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
@@ -1161,6 +1166,9 @@ impl Session {
             .cloned()
         else {
             self.services.network_proxy.store(None);
+            self.services
+                .turn_environments
+                .set_snapshot_credential_broker(SnapshotCredentialBrokerState::Inactive);
             return;
         };
 
@@ -1187,11 +1195,22 @@ impl Session {
         // listeners and must not be exposed as active managed proxy runtimes.
         if !spec.enabled() {
             self.services.network_proxy.store(None);
+            self.services
+                .turn_environments
+                .set_snapshot_credential_broker(SnapshotCredentialBrokerState::Inactive);
             return;
         }
         if let Some(started_proxy) = self.services.network_proxy.load_full() {
             if let Err(err) = spec.apply_to_started_proxy(started_proxy.as_ref()).await {
                 warn!("failed to refresh managed network proxy for sandbox change: {err}");
+            } else {
+                self.services
+                    .turn_environments
+                    .set_snapshot_credential_broker(if spec.credential_broker_enabled() {
+                        SnapshotCredentialBrokerState::Ready(started_proxy.proxy())
+                    } else {
+                        SnapshotCredentialBrokerState::Inactive
+                    });
             }
             return;
         }
@@ -1210,11 +1229,25 @@ impl Session {
         .await
         {
             Ok((started_proxy, _session_network_proxy)) => {
+                if spec.credential_broker_enabled() {
+                    self.services
+                        .turn_environments
+                        .set_snapshot_credential_broker(SnapshotCredentialBrokerState::Ready(
+                            started_proxy.proxy(),
+                        ));
+                }
                 self.services
                     .network_proxy
                     .store(Some(Arc::new(started_proxy)));
             }
             Err(err) => {
+                self.services
+                    .turn_environments
+                    .set_snapshot_credential_broker(if spec.credential_broker_enabled() {
+                        SnapshotCredentialBrokerState::Unavailable
+                    } else {
+                        SnapshotCredentialBrokerState::Inactive
+                    });
                 warn!("failed to start managed network proxy for sandbox change: {err}");
             }
         }
@@ -1469,8 +1502,14 @@ impl Session {
                 self.state.lock().await.latest_token_usage_record =
                     Self::last_token_usage_record_from_rollout(&rollout_items);
 
+                // Checkpoint effective settings even when no turn follows the resume.
+                self.persist_rollout_items(&[RolloutItem::EventMsg(
+                    thread_settings::applied_event(self).await,
+                )])
+                .await;
+
                 // Defer seeding the session's initial context until the first turn starts so
-                // turn/start overrides can be merged before we write to the rollout.
+                // turn/start overrides can be merged before we write model-visible context.
                 if !is_subagent {
                     let _ = self.flush_rollout().await;
                 }
@@ -1604,6 +1643,8 @@ impl Session {
             state
                 .history
                 .restore_review_context(Some(&retained_context), guardian_history.as_ref());
+            // The next send supplies the selected effort. Refresh its trusted override too.
+            state.reasoning_effort_pin = ReasoningEffortPin::Unset;
             if let Some(world_state) = world_state_baseline {
                 state.history.set_world_state_baseline(world_state);
             }
@@ -2081,6 +2122,13 @@ impl Session {
                 turn_context.sub_id.clone(),
                 error,
             ));
+    }
+
+    /// Uses the extension-owned reviewer, or the same manager for standalone hosts.
+    pub(crate) fn guardian_review_session(&self) -> Arc<GuardianReviewSessionManager> {
+        self.services
+            .thread_extension_data
+            .get_or_init(GuardianReviewSessionManager::default)
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -2780,7 +2828,6 @@ impl Session {
     ) -> Option<RequestPermissionsResponse> {
         let turn_context = &step_context.turn;
         let approval_policy = step_context.settings.approval_policy();
-        let approvals_reviewer = step_context.settings.approvals_reviewer();
         let Some(environment) = step_context
             .environments
             .turn_environments()
@@ -2827,7 +2874,6 @@ impl Session {
                 strict_auto_review: false,
             });
         };
-        if crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
         {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
@@ -2836,13 +2882,13 @@ impl Session {
             let action = ApprovalAction::RequestPermissions {
                 id: call_id.clone(),
                 turn_id: turn_context.sub_id.clone(),
-                reason: args.reason,
+                reason: args.reason.clone(),
                 permissions: requested_permissions.clone(),
             };
             let approval_context = ApprovalContext {
                 review_context: crate::guardian::GuardianReviewContext::from(step_context),
                 cancellation_token: Some(cancellation_token.clone()),
-                call_id,
+                call_id: call_id.clone(),
                 tool_name: ToolName::plain("request_permissions"),
                 strict_auto_review: false,
                 approval_reason: None,
@@ -2857,54 +2903,53 @@ impl Session {
                     &approval_context,
                 ) => decision,
             };
-            let response = match decision {
-                ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-                    RequestPermissionsResponse {
-                        permissions: requested_permissions.clone(),
-                        scope: PermissionGrantScope::Turn,
-                        strict_auto_review: false,
+            if let Some(decision) = decision {
+                let (permissions, scope) = match decision {
+                    ReviewDecision::Approved
+                    | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                    | ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment:
+                            NetworkPolicyAmendment {
+                                action: NetworkPolicyRuleAction::Allow,
+                                ..
+                            },
+                    } => (requested_permissions.clone(), PermissionGrantScope::Turn),
+                    ReviewDecision::ApprovedForSession => {
+                        (requested_permissions.clone(), PermissionGrantScope::Session)
                     }
-                }
-                ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
-                    permissions: requested_permissions.clone(),
-                    scope: PermissionGrantScope::Session,
+                    ReviewDecision::ApprovedMcpPolicyAmendment
+                    | ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment:
+                            NetworkPolicyAmendment {
+                                action: NetworkPolicyRuleAction::Deny,
+                                ..
+                            },
+                    }
+                    | ReviewDecision::Abort
+                    | ReviewDecision::Denied { .. }
+                    | ReviewDecision::TimedOut => (
+                        RequestPermissionProfile::default(),
+                        PermissionGrantScope::Turn,
+                    ),
+                };
+                let response = RequestPermissionsResponse {
+                    permissions,
+                    scope,
                     strict_auto_review: false,
-                },
-                ReviewDecision::NetworkPolicyAmendment {
-                    network_policy_amendment,
-                } => match network_policy_amendment.action {
-                    NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
-                        permissions: requested_permissions.clone(),
-                        scope: PermissionGrantScope::Turn,
-                        strict_auto_review: false,
-                    },
-                    NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
-                        permissions: RequestPermissionProfile::default(),
-                        scope: PermissionGrantScope::Turn,
-                        strict_auto_review: false,
-                    },
-                },
-                ReviewDecision::ApprovedMcpPolicyAmendment
-                | ReviewDecision::Abort
-                | ReviewDecision::Denied { .. }
-                | ReviewDecision::TimedOut => RequestPermissionsResponse {
-                    permissions: RequestPermissionProfile::default(),
-                    scope: PermissionGrantScope::Turn,
-                    strict_auto_review: false,
-                },
-            };
-            let response = Self::normalize_request_permissions_response(
-                requested_permissions,
-                response,
-                &context,
-            );
-            self.record_granted_request_permissions_for_turn(
-                &response,
-                &environment.selection.environment_id,
-                originating_turn_state.as_ref(),
-            )
-            .await;
-            return Some(response);
+                };
+                let response = Self::normalize_request_permissions_response(
+                    requested_permissions,
+                    response,
+                    &context,
+                );
+                self.record_granted_request_permissions_for_turn(
+                    &response,
+                    &environment.selection.environment_id,
+                    originating_turn_state.as_ref(),
+                )
+                .await;
+                return Some(response);
+            }
         }
 
         let _elicitation = self.services.elicitations.register();
@@ -3780,7 +3825,7 @@ impl Session {
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
         }
-        if self.enabled(Feature::GuardianThreadContext)
+        if self.guardian_context_mode == GuardianContextMode::ThreadOwned
             && let Some(checkpoint) = items.iter_mut().rev().find(|envelope| {
                 matches!(
                     envelope.item,
@@ -3823,6 +3868,7 @@ impl Session {
             );
             compacted_item.guardian_history = state.history.guardian_history_checkpoint();
             compacted_item.retained_context = Some(state.history.retained_context().clone());
+            state.reasoning_effort_pin = ReasoningEffortPin::Compacted;
             if let Some(world_state) = world_state_baseline {
                 let snapshot = world_state.snapshot();
                 world_state_item = Some(WorldStateItem::full(snapshot.clone().into_object()));
@@ -4251,7 +4297,7 @@ impl Session {
             .map(ResponseItemEnvelope::new)
             .chain(retained_client_developer_messages)
             .collect();
-        let turn_context_item = turn_context.to_turn_context_item();
+        let turn_context_item = step_context.to_turn_context_item();
         self.replace_compacted_history(
             context_items,
             Some(turn_context_item),
@@ -4297,7 +4343,7 @@ impl Session {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
-        let turn_context_item = turn_context.to_turn_context_item();
+        let turn_context_item = step_context.to_turn_context_item();
         let turn_context_changed = reference_context_item.as_ref() != Some(&turn_context_item);
         let should_inject_full_context = reference_context_item.is_none();
         let world_state = Arc::new(self.build_world_state_for_step(step_context).await?);

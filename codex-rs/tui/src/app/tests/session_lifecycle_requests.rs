@@ -120,6 +120,7 @@ async fn same_thread_retry_keeps_subscription_and_restores_draft() -> Result<()>
         crate::resume_picker::SessionTarget {
             path,
             thread_id,
+            cwd: None,
             history_mode: None,
         },
     )
@@ -198,9 +199,54 @@ pub(super) async fn start_recording_remote_app_server(
 pub(super) async fn start_recording_app_server_with_history(
     config: &Config,
     history_capabilities: HistoryCapabilities,
+    blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    failed_thread_name: Option<&'static str>,
+    thread_params_mode: crate::app_server_session::ThreadParamsMode,
+    loader_overrides: LoaderOverrides,
+) -> Result<RecordingAppServer> {
+    start_recording_app_server_with_realtime_speech(
+        config,
+        history_capabilities,
+        blocked_thread_list,
+        failed_thread_name,
+        thread_params_mode,
+        RealtimeRequestBehavior::Forward,
+        loader_overrides,
+    )
+    .await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RealtimeRequestBehavior {
+    Forward,
+    AcceptStart,
+    AcceptSpeech,
+    AcceptSpeechAndStallStop,
+}
+
+pub(super) async fn start_recording_realtime_speech_app_server(
+    config: &Config,
+    realtime_behavior: RealtimeRequestBehavior,
+) -> Result<RecordingAppServer> {
+    start_recording_app_server_with_realtime_speech(
+        config,
+        HistoryCapabilities::Current,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        realtime_behavior,
+        LoaderOverrides::default(),
+    )
+    .await
+}
+
+async fn start_recording_app_server_with_realtime_speech(
+    config: &Config,
+    history_capabilities: HistoryCapabilities,
     mut blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
     failed_thread_name: Option<&'static str>,
     thread_params_mode: crate::app_server_session::ThreadParamsMode,
+    realtime_behavior: RealtimeRequestBehavior,
     loader_overrides: LoaderOverrides,
 ) -> Result<RecordingAppServer> {
     let state_db =
@@ -255,6 +301,11 @@ pub(super) async fn start_recording_app_server_with_history(
                         .lock()
                         .expect("request recorder lock")
                         .push(request.clone());
+                    if realtime_behavior == RealtimeRequestBehavior::AcceptSpeechAndStallStop
+                        && request.method == "thread/realtime/stop"
+                    {
+                        continue;
+                    }
                     let request_id = request.id.clone();
                     let params = request.params.as_ref();
                     let requires_pagination = match request.method.as_str() {
@@ -285,7 +336,20 @@ pub(super) async fn start_recording_app_server_with_history(
                             .is_some_and(|tools| {
                                 tools.iter().any(|tool| tool["type"] == "namespace")
                             });
-                    let response = if let HistoryCapabilities::ConfigReadUnsupported(code) =
+                    let fake_realtime_response = (realtime_behavior
+                        == RealtimeRequestBehavior::AcceptStart
+                        && request.method == "thread/realtime/start")
+                        || (matches!(
+                            realtime_behavior,
+                            RealtimeRequestBehavior::AcceptSpeech
+                                | RealtimeRequestBehavior::AcceptSpeechAndStallStop
+                        ) && request.method == "thread/realtime/appendSpeech");
+                    let response = if fake_realtime_response {
+                        JSONRPCMessage::Response(JSONRPCResponse {
+                            id: request_id,
+                            result: serde_json::json!({}),
+                        })
+                    } else if let HistoryCapabilities::ConfigReadUnsupported(code) =
                         history_capabilities
                         && request.method == "config/read"
                     {
@@ -2994,8 +3058,9 @@ model_reasoning_effort = "low"
         .pop()
         .expect("unused checkout");
     browser_entries.push(crate::worktree_browser::Entry {
+        root: unused.root.clone(),
         cwd: unused.cwd.clone(),
-        owner: None,
+        owner: crate::worktree_browser::Owner::None,
     });
     assert_eq!(
         manager
@@ -3067,8 +3132,9 @@ terminal_visualization_instructions = true
         .find(|checkout| checkout.cwd != unused.cwd)
         .expect("feature mismatch leaves an unused checkout");
     browser_entries.push(crate::worktree_browser::Entry {
+        root: feature_mismatch_checkout.root,
         cwd: feature_mismatch_checkout.cwd,
-        owner: None,
+        owner: crate::worktree_browser::Owner::None,
     });
     while events.try_recv().is_ok() {}
     app.handle_event(
@@ -3138,8 +3204,9 @@ terminal_visualization_instructions = true
         None
     );
     browser_entries.push(crate::worktree_browser::Entry {
+        root: stale_checkout,
         cwd: stale_cwd,
-        owner: None,
+        owner: crate::worktree_browser::Owner::None,
     });
     for mode in [ManagedWorktreeMode::New, ManagedWorktreeMode::Fork] {
         requests.lock().expect("request recorder lock").clear();
@@ -3170,8 +3237,9 @@ terminal_visualization_instructions = true
             .find(|checkout| checkout.cwd.canonicalize().ok().as_ref() == Some(&cwd))
             .expect("managed checkout");
         browser_entries.push(crate::worktree_browser::Entry {
+            root: checkout.root.clone(),
             cwd: checkout.cwd.clone(),
-            owner: Some(replacement),
+            owner: crate::worktree_browser::Owner::Unavailable(replacement),
         });
         assert!(checkout.root.starts_with(home.join("worktrees")));
         assert!(!project_pool.exists());
@@ -3245,8 +3313,9 @@ terminal_visualization_instructions = true
         })
         .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
     browser_entries.push(crate::worktree_browser::Entry {
-        cwd: unowned.cwd,
-        owner: None,
+        root: unowned.root.clone(),
+        cwd: unowned.cwd.clone(),
+        owner: crate::worktree_browser::Owner::None,
     });
     browser_entries.sort_by(|left, right| left.cwd.cmp(&right.cwd));
     for owner in [None, Some("not-a-thread-uuid")] {
@@ -3262,6 +3331,45 @@ terminal_visualization_instructions = true
             browser_entries
         );
     }
+    let missing_owner = ThreadId::new();
+    let missing_checkout = manager
+        .create(&codex_worktree::CreateWorktree {
+            source_cwd: source.clone(),
+            base: None,
+        })
+        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+    manager
+        .bind_thread(&missing_checkout.root, &missing_owner.to_string())
+        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+    let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+    crate::worktree_browser::fetch(
+        crate::worktree_browser::Request {
+            id: uuid::Uuid::new_v4(),
+            cwd: source.clone(),
+            thread_id: Some(original),
+        },
+        home.clone(),
+        server.request_handle(),
+        crate::app_event_sender::AppEventSender::new(browser_tx),
+    );
+    let Some(AppEvent::ManagedWorktreesLoaded {
+        result: Ok(entries),
+        ..
+    }) = tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 5),
+        browser_rx.recv(),
+    )
+    .await?
+    else {
+        panic!("browser must return annotated worktrees");
+    };
+    assert_eq!(
+        entries
+            .iter()
+            .find(|entry| entry.root == missing_checkout.root)
+            .map(|entry| &entry.owner),
+        Some(&crate::worktree_browser::Owner::Unavailable(missing_owner))
+    );
     app.start_fresh_session_with_summary_hint(
         &mut tui,
         &mut server,
@@ -3296,6 +3404,80 @@ terminal_visualization_instructions = true
         assert_eq!(app.chat_widget.thread_id() != Some(unsaved), is_new);
         assert_eq!(recorded_params(&requests, "thread/fork").len(), 0);
     }
+    let saved_owner = entries
+        .iter()
+        .find_map(|entry| match &entry.owner {
+            crate::worktree_browser::Owner::Resumable(thread) => Some(thread.clone()),
+            _ => None,
+        })
+        .expect("browser should resolve a saved owner");
+    let saved_path = server
+        .thread_read(saved_owner.id, /*include_turns*/ false)
+        .await?
+        .path
+        .expect("saved rollout path");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&saved_path)?
+        .set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60),
+        ))?;
+    codex_rollout::spawn_rollout_compression_worker(home.clone());
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while saved_path.exists() || !saved_path.with_extension("jsonl.zst").is_file() {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+    crate::worktree_browser::fetch(
+        crate::worktree_browser::Request {
+            id: uuid::Uuid::new_v4(),
+            cwd: source.clone(),
+            thread_id: Some(original),
+        },
+        home.clone(),
+        server.request_handle(),
+        crate::app_event_sender::AppEventSender::new(browser_tx),
+    );
+    let Some(AppEvent::ManagedWorktreesLoaded {
+        result: Ok(compressed_entries),
+        ..
+    }) = tokio::time::timeout(std::time::Duration::from_secs(10), browser_rx.recv()).await?
+    else {
+        panic!("browser must return compressed owner metadata");
+    };
+    assert!(compressed_entries.iter().any(|entry| matches!(
+        &entry.owner,
+        crate::worktree_browser::Owner::Resumable(thread) if thread.id == saved_owner.id
+    )));
+    server.thread_archive(saved_owner.id).await?;
+    let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
+    crate::worktree_browser::fetch(
+        crate::worktree_browser::Request {
+            id: uuid::Uuid::new_v4(),
+            cwd: source.clone(),
+            thread_id: Some(original),
+        },
+        home,
+        server.request_handle(),
+        crate::app_event_sender::AppEventSender::new(browser_tx),
+    );
+    let Some(AppEvent::ManagedWorktreesLoaded {
+        result: Ok(entries),
+        ..
+    }) = tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 10),
+        browser_rx.recv(),
+    )
+    .await?
+    else {
+        panic!("browser must return archived owner metadata");
+    };
+    assert!(entries.iter().any(|entry| matches!(
+        &entry.owner,
+        crate::worktree_browser::Owner::Archived(thread) if thread.id == saved_owner.id
+    )));
     server.shutdown().await?;
     proxy.await??;
     Ok(())
@@ -3445,6 +3627,9 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         let thread_id = [original, ThreadId::new()][usize::from(kind == "stale")];
         app.handle_event(&mut tui, &mut server, change(thread_id, path))
             .await?;
+        if let Some(pending) = app.pending_working_directory_change.take() {
+            Box::pin(app.finish_working_directory_change(&mut tui, &mut server, pending)).await;
+        }
         assert_eq!(app.chat_widget.thread_id(), Some(original));
         assert_eq!(app.config.cwd, current.clone().abs());
         assert!(app.runtime_working_directory_override.is_none());
@@ -3525,6 +3710,13 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     requests.lock().expect("request recorder lock").clear();
     app.handle_event(&mut tui, &mut server, change(original, "../trusted"))
         .await?;
+    // Dispatch only queues /cd: configuration loading happens on a fresh loop iteration.
+    assert_eq!(app.config.cwd, current.clone().abs());
+    let pending = app
+        .pending_working_directory_change
+        .take()
+        .expect("valid /cd queued");
+    Box::pin(app.finish_working_directory_change(&mut tui, &mut server, pending)).await;
     let forked = app.chat_widget.thread_id().expect("forked thread");
     assert_ne!(forked, original);
     let forked_rollout = app.chat_widget.rollout_path().expect("forked rollout");
@@ -3844,6 +4036,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                         crate::resume_picker::SessionTarget {
                             path: Some(root_rollout_path),
                             thread_id: root_thread_id,
+                            cwd: None,
                             history_mode: None,
                         },
                     )

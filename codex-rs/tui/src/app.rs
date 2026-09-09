@@ -131,6 +131,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -146,8 +147,6 @@ use codex_config::types::WindowsToml;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
-use codex_model_provider::create_model_provider;
-use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
@@ -236,12 +235,15 @@ mod pets;
 mod platform_actions;
 mod plugin_mentions;
 mod rate_limit_refresh;
+mod realtime_delivery;
+mod reasoning_replay;
 mod recap;
 mod reconnect;
 mod replay_filter;
 mod resize_reflow;
 mod resume_config;
 mod safety_buffering;
+mod server_version_notice;
 mod session_lifecycle;
 mod session_picker;
 mod side;
@@ -256,6 +258,9 @@ mod thread_session_state;
 mod thread_settings;
 mod thread_title;
 mod transcript_export;
+mod user_verification;
+mod user_verification_errors;
+mod user_verification_requests;
 mod working_directory;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -277,6 +282,10 @@ enum ThreadInteractiveRequest {
     AppLink(AppLinkViewParams),
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
+    UserVerification {
+        thread_id: ThreadId,
+        request: crate::bottom_pane::user_verification::UserVerificationRequest,
+    },
 }
 
 /// Extracts `receiver_thread_ids` from collab agent tool-call notifications.
@@ -559,6 +568,8 @@ pub(crate) struct App {
     cloud_config_bundle: CloudConfigBundleLoader,
     runtime_approval_policy_override: Option<RuntimeApprovalPolicyOverride>,
     runtime_permission_profile_override: Option<RuntimePermissionProfileOverride>,
+    /// In-flight remote selections; confirmed settings live in each task's server snapshot.
+    pending_server_profiles: HashMap<ThreadId, PermissionProfileSelection>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -573,6 +584,7 @@ pub(crate) struct App {
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
+    pending_thread_switch_resets: usize,
     pub(crate) scrollback_has_older_history: bool,
 
     pub(crate) enhanced_keys_supported: bool,
@@ -616,6 +628,10 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
+    pending_realtime_speech_replay: HashMap<ThreadId, Vec<(String, ThreadItem)>>,
+    pending_realtime_transcript_replay:
+        HashMap<ThreadId, VecDeque<crate::chatwidget::RealtimeTranscriptRecord>>,
+    realtime_replay_order: VecDeque<ThreadId>,
     temporary_structured_requests: HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
     /// Track title generation across thread switches and deduplicate automatic requests.
     pending_thread_titles: HashSet<(ThreadId, ThreadTitleDestination)>,
@@ -635,6 +651,11 @@ pub(crate) struct App {
         tokio::sync::broadcast::Sender<codex_app_server_protocol::ThreadStatusChangedNotification>,
     dynamic_tool_tasks: HashMap<codex_app_server_protocol::RequestId, (String, JoinHandle<()>)>,
     pending_startup_thread_start: bool,
+    pending_server_version_notice: Option<crate::status::remote_connection::ServerVersionNotice>,
+    /// Opens the session picker after event dispatch returns, with a fresh stack.
+    pending_open_resume_picker: bool,
+    /// Runs a requested /cd after event dispatch returns, with a fresh stack.
+    pending_working_directory_change: Option<working_directory::PendingWorkingDirectoryChange>,
     /// Starts worktree setup after the event handler returns, with a fresh stack.
     pending_start_managed_worktree: Option<(crate::app_event::ManagedWorktreeMode, Option<String>)>,
     pending_managed_worktree_creation: bool,
@@ -815,10 +836,6 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
-            runtime_model_provider_base_url: self
-                .chat_widget
-                .runtime_model_provider_base_url()
-                .map(str::to_string),
             initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
