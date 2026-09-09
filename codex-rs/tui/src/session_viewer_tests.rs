@@ -180,6 +180,7 @@ fn renders_only_the_conversation() {
     let cwd = std::env::current_dir().expect("current directory");
     let cells: TranscriptCells = vec![
         Arc::new(UserHistoryCell {
+            spoken: false,
             message: "Show me the session without controls.".to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
