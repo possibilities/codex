@@ -807,6 +807,8 @@ async fn exec_history_shows_unified_exec_tool_calls() {
 #[tokio::test]
 async fn unified_exec_unknown_end_with_active_exploring_cell_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    // Snapshot the execution state independently of the activity indicator's phase.
+    chat.local_settings.tui.animations = false;
     chat.on_task_started();
 
     begin_exec(&mut chat, "call-exploring", "cat /dev/null");
