@@ -1,10 +1,12 @@
-# One manual test-fixture compatibility change is required
+# Test-fixture compatibility change
 
-This published branch intentionally leaves `codex-rs/core/tests/suite/compact_remote.rs` unchanged. Automated publication of its full contents was blocked because the existing public file contains an authentication-shaped test fixture. No real credential was introduced by this feature.
+**Resolved on this branch:** the repository owner applied the change in commit `4d317944c27819703fbcffd1e465df1ffee70bde`. Do not apply the patch again to current checkouts. The instructions below are retained for older snapshots; CI checks the prerequisite before compiling the native tests.
 
-The complete local patch was validated, but this public branch is **not complete for the broader core integration-test build** until the following one-line compatibility change is applied. The native-contract CI workflow reports that prerequisite instead of claiming a complete green build.
+The initial published snapshot intentionally left `codex-rs/core/tests/suite/compact_remote.rs` unchanged. Automated publication of its full contents was blocked because the existing public file contains an authentication-shaped test fixture. No real credential was introduced by this feature.
 
-From a checkout of this branch, inspect and apply the credential-free patch:
+The complete local patch was validated, but that initial snapshot was **not complete for the broader core integration-test build** until the following one-line compatibility change was applied. The native-contract CI workflow reports that prerequisite instead of claiming a complete green build.
+
+For an older checkout missing this change, inspect and apply the credential-free patch:
 
 ```sh
 git apply --check external-orchestrator-bridge/manual-test-compat.patch

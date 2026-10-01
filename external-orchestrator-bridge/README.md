@@ -1,6 +1,6 @@
 # Codex native voice / OpenCode V2 bridge
 
-**Manual prerequisite:** this published branch needs the one-line test-fixture change described in [MANUAL-COMPATIBILITY.md](MANUAL-COMPATIBILITY.md) before the broader core integration-test build is complete. Automated publication of that existing fixture file was blocked; the included patch contains no credential material.
+**Compatibility prerequisite resolved:** the repository owner applied the one-line test-fixture change in commit `4d317944c27819703fbcffd1e465df1ffee70bde`. Current branch checkouts already include it. See [MANUAL-COMPATIBILITY.md](MANUAL-COMPATIBILITY.md) only when using an older snapshot.
 
 This experimental, dependency-free Node.js stdio proxy keeps Codex's native realtime transport while routing backing-agent work to a patched OpenCode V2 server. It requires **both fork patches**. It is not a replacement audio client and does not modify an installed desktop application.
 

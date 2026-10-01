@@ -61,17 +61,26 @@ async fn start_external(
 #[tokio::test]
 async fn external_realtime_routes_exclusively_replays_and_fences_restarts() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let script = vec![vec![
+    let handoffs = vec![
         session_updated("same-session"),
         v2_background_agent_tool_call("handoff_one", "raw <request>"),
         v2_background_agent_tool_call("handoff_two", "steer"),
-    ]];
+    ];
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V2,
         no_main_loop_responses(),
         realtime_sideband(vec![
-            open_realtime_sideband_connection(script.clone()),
-            open_realtime_sideband_connection(script),
+            // This fixture consumes one client frame per batch. Keep reading through the
+            // client's close so the server can accept the replacement connection.
+            realtime_sideband_connection(vec![
+                handoffs.clone(), // session.update
+                vec![],           // completed text item
+                vec![],           // first handoff acknowledgement
+                vec![],           // response.create
+                vec![],           // second handoff acknowledgement
+                vec![],           // client closes the first voice incarnation
+            ]),
+            open_realtime_sideband_connection(vec![handoffs]),
         ]),
     )
     .await?;
@@ -231,10 +240,15 @@ async fn external_realtime_v3_preserves_provider_phase_and_flushes_final_suffix(
     skip_if_no_network!(Ok(()));
     let mut harness = RealtimeE2eHarness::new(
         RealtimeTestVersion::V1, no_main_loop_responses(),
-        realtime_sideband(vec![open_realtime_sideband_connection(vec![vec![
-            session_started("v3-external"),
-            json!({"type":"delegation.created","offset_ms":100,"item":{"id":"handoff_one","type":"delegation","target":"client","content":[{"type":"input_text","text":"help"}]}}),
-        ]])]),
+        realtime_sideband(vec![open_realtime_sideband_connection(vec![
+            vec![
+                session_started("v3-external"),
+                json!({"type":"delegation.created","offset_ms":100,"item":{"id":"handoff_one","type":"delegation","target":"client","content":[{"type":"input_text","text":"help"}]}}),
+            ],
+            vec![], // commentary context append
+            vec![], // final-answer context append
+            vec![], // final-answer suffix append
+        ])]),
     ).await?;
     let params: ThreadRealtimeStartParams = serde_json::from_value(json!({
         "threadId": harness.thread_id, "externalOrchestrator": true, "includeStartupContext": false,
