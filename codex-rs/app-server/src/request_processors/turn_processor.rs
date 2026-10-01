@@ -2,7 +2,11 @@ use super::*;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
+use codex_app_server_protocol::ThreadRealtimeExternalEventParams;
+use codex_app_server_protocol::ThreadRealtimeExternalEventResponse;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::external_realtime::ExternalRealtimeEventParams;
+use codex_protocol::external_realtime::ExternalRealtimeStartParams;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -240,6 +244,32 @@ impl TurnRequestProcessor {
         self.thread_realtime_start_inner(request_id, params)
             .await
             .map(|response| response.map(Into::into))
+    }
+
+    pub(crate) async fn thread_realtime_external_event(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRealtimeExternalEventParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let accepted = thread
+            .realtime_external_event(ExternalRealtimeEventParams {
+                incarnation_id: params.incarnation_id,
+                handoff_id: params.handoff_id,
+                execution_id: params.execution_id,
+                sequence: params.sequence,
+                event: params.event,
+            })
+            .await
+            .map_err(|err| invalid_request(err.to_string()))?;
+        Ok(Some(
+            ThreadRealtimeExternalEventResponse { accepted }.into(),
+        ))
     }
 
     pub(crate) async fn thread_realtime_append_audio(
@@ -1058,50 +1088,94 @@ impl TurnRequestProcessor {
         else {
             return Ok(None);
         };
-        self.submit_core_op(
-            request_id,
-            thread.as_ref(),
-            Op::RealtimeConversationStart(ConversationStartParams {
-                client_managed_handoffs: params.client_managed_handoffs.unwrap_or(false),
-                delegation_ack_filler: params.delegation_ack_filler,
-                flush_transcript_tail_on_session_end: params
-                    .flush_transcript_tail_on_session_end
-                    .unwrap_or(false),
-                codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
-                codex_response_item_prefix: params.codex_response_item_prefix,
-                codex_response_handoff_mode: params.codex_response_handoff_mode.unwrap_or_default(),
-                codex_response_handoff_channel_prefixes: params
-                    .codex_response_handoff_channel_prefixes,
-                model: params.model,
-                output_modality: params.output_modality,
-                include_startup_context: params.include_startup_context.unwrap_or(true),
-                initial_items: params
-                    .initial_items
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|item| ConversationTextParams {
-                        text: item.text,
-                        role: item.role,
-                    })
-                    .collect(),
-                realtime_start_instructions: params.realtime_start_instructions,
-                realtime_end_instructions: params.realtime_end_instructions,
-                prompt: params.prompt,
-                realtime_session_id: params.realtime_session_id,
-                transport: params.transport.map(|transport| match transport {
-                    ThreadRealtimeStartTransport::Websocket => {
-                        ConversationStartTransport::Websocket
-                    }
-                    ThreadRealtimeStartTransport::Webrtc { sdp } => {
-                        ConversationStartTransport::Webrtc { sdp }
-                    }
-                }),
-                version: params.version,
-                voice: params.voice,
+        if !params.external_orchestrator && params.external_startup_context.is_some() {
+            return Err(invalid_request(
+                "externalStartupContext requires externalOrchestrator",
+            ));
+        }
+        if params.external_orchestrator
+            && params.include_startup_context.unwrap_or(true)
+            && params.external_startup_context.is_none()
+        {
+            return Err(invalid_request(
+                "externalStartupContext is required when external startup context is enabled",
+            ));
+        }
+        if params.external_orchestrator
+            && (params.client_managed_handoffs.unwrap_or(false)
+                || params.codex_responses_as_items.unwrap_or(false))
+        {
+            return Err(invalid_request(
+                "external orchestration owns response handoffs",
+            ));
+        }
+        if params.external_orchestrator
+            && (params
+                .realtime_start_instructions
+                .as_ref()
+                .is_some_and(|text| !text.is_empty())
+                || params
+                    .realtime_end_instructions
+                    .as_ref()
+                    .is_some_and(|text| !text.is_empty())
+                || params.codex_response_handoff_mode.is_some_and(|mode| {
+                    mode != codex_protocol::protocol::CodexResponseHandoffMode::Thinking
+                })
+                || params.codex_response_handoff_channel_prefixes.is_some()
+                || params.codex_response_item_prefix.is_some())
+        {
+            return Err(invalid_request(
+                "external orchestration does not support host backing-agent instructions or response routing overrides",
+            ));
+        }
+        let conversation = ConversationStartParams {
+            client_managed_handoffs: params.client_managed_handoffs.unwrap_or(false),
+            delegation_ack_filler: params.delegation_ack_filler,
+            flush_transcript_tail_on_session_end: params
+                .flush_transcript_tail_on_session_end
+                .unwrap_or(false),
+            codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
+            codex_response_item_prefix: params.codex_response_item_prefix,
+            codex_response_handoff_mode: params.codex_response_handoff_mode.unwrap_or_default(),
+            codex_response_handoff_channel_prefixes: params.codex_response_handoff_channel_prefixes,
+            model: params.model,
+            output_modality: params.output_modality,
+            include_startup_context: params.include_startup_context.unwrap_or(true),
+            initial_items: params
+                .initial_items
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| ConversationTextParams {
+                    text: item.text,
+                    role: item.role,
+                })
+                .collect(),
+            realtime_start_instructions: params.realtime_start_instructions,
+            realtime_end_instructions: params.realtime_end_instructions,
+            prompt: params.prompt,
+            realtime_session_id: params.realtime_session_id,
+            transport: params.transport.map(|transport| match transport {
+                ThreadRealtimeStartTransport::Websocket => ConversationStartTransport::Websocket,
+                ThreadRealtimeStartTransport::Webrtc { sdp } => {
+                    ConversationStartTransport::Webrtc { sdp }
+                }
             }),
-        )
-        .await
-        .map_err(|err| internal_error(format!("failed to start realtime conversation: {err}")))?;
+            version: params.version,
+            voice: params.voice,
+        };
+        let op = if params.external_orchestrator {
+            Op::RealtimeConversationStartExternal(ExternalRealtimeStartParams {
+                conversation,
+                startup_context: params.external_startup_context,
+            })
+        } else {
+            Op::RealtimeConversationStart(conversation)
+        };
+        self.submit_core_op(request_id, thread.as_ref(), op)
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to start realtime conversation: {err}"))
+            })?;
         Ok(Some(ThreadRealtimeStartResponse::default()))
     }
 

@@ -1113,6 +1113,18 @@ impl TestAppServer {
         self.send_request("turn/interrupt", params).await
     }
 
+    /// Send ordered external voice feedback through the public JSON-RPC endpoint.
+    pub async fn send_thread_realtime_external_event_request(
+        &mut self,
+        params: codex_app_server_protocol::ThreadRealtimeExternalEventParams,
+    ) -> anyhow::Result<i64> {
+        self.send_request(
+            "thread/realtime/externalEvent",
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
     /// Send a `thread/realtime/start` JSON-RPC request (v2).
     pub async fn send_thread_realtime_start_request(
         &mut self,

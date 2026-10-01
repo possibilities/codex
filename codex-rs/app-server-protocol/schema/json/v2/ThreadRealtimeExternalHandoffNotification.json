@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ExternalRealtimeHandoffSource": {
+      "enum": [
+        "handoff",
+        "transcriptTail"
+      ],
+      "type": "string"
+    },
+    "RealtimeTranscriptEntry": {
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "EXPERIMENTAL - structured delegation from native voice to an external backing agent.",
+  "properties": {
+    "activeTranscript": {
+      "items": {
+        "$ref": "#/definitions/RealtimeTranscriptEntry"
+      },
+      "type": "array"
+    },
+    "handoffId": {
+      "type": "string"
+    },
+    "incarnationId": {
+      "type": "string"
+    },
+    "inputTranscript": {
+      "type": "string"
+    },
+    "itemId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "realtimeSessionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "$ref": "#/definitions/ExternalRealtimeHandoffSource"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "transcriptTail": {
+      "items": {
+        "$ref": "#/definitions/RealtimeTranscriptEntry"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "activeTranscript",
+    "handoffId",
+    "incarnationId",
+    "inputTranscript",
+    "source",
+    "threadId"
+  ],
+  "title": "ThreadRealtimeExternalHandoffNotification",
+  "type": "object"
+}

@@ -364,6 +364,8 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                external_orchestrator: false,
+                external_startup_context: None,
                 client_managed_handoffs,
                 delegation_ack_filler,
                 flush_transcript_tail_on_session_end: None,
@@ -425,6 +427,8 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                external_orchestrator: false,
+                external_startup_context: None,
                 thread_id: self.thread_id.clone(),
                 client_managed_handoffs: None,
                 delegation_ack_filler: None,
@@ -464,6 +468,8 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                external_orchestrator: false,
+                external_startup_context: None,
                 thread_id: self.thread_id.clone(),
                 client_managed_handoffs: None,
                 delegation_ack_filler: None,
@@ -735,6 +741,8 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1017,6 +1025,8 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1115,6 +1125,8 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1294,6 +1306,8 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1367,6 +1381,8 @@ async fn realtime_mode_uses_client_instructions_on_entry_and_exit() -> Result<()
     let start_request_id = harness
         .mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             thread_id: harness.thread_id.clone(),
             client_managed_handoffs: None,
             delegation_ack_filler: None,
@@ -1503,6 +1519,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let thread_id = thread_start.thread.id;
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1642,6 +1660,7 @@ async fn webrtc_v1_start_posts_offer_returns_sdp_and_joins_sideband() -> Result<
         started,
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
+                incarnation_id: None,
                 thread_id: harness.thread_id.clone(),
                 realtime_session_id: Some(harness.thread_id.clone()),
                 version: RealtimeConversationVersion::V1,
@@ -1707,6 +1726,7 @@ async fn webrtc_v3_start_posts_live_session_and_joins_without_session_update() -
         started,
         StartedWebrtcRealtime {
             started: ThreadRealtimeStartedNotification {
+                incarnation_id: None,
                 thread_id: harness.thread_id.clone(),
                 realtime_session_id: Some(harness.thread_id.clone()),
                 version: RealtimeConversationVersion::V3,
@@ -3144,6 +3164,8 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -3210,6 +3232,8 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            external_orchestrator: false,
+            external_startup_context: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -3561,3 +3585,6 @@ fn assert_invalid_request(error: JSONRPCError, message: String) {
     assert_eq!(error.error.message, message);
     assert_eq!(error.error.data, None);
 }
+
+#[path = "realtime_external_tests.rs"]
+mod external_tests;

@@ -12,6 +12,13 @@
   },
   "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
   "properties": {
+    "incarnationId": {
+      "description": "Present for external sessions; changes on every successful start.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "realtimeSessionId": {
       "type": [
         "string",

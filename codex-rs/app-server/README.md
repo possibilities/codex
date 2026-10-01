@@ -2525,3 +2525,83 @@ For server-initiated request payloads, annotate the field the same way so schema
    ```bash
    just test -p codex-app-server-protocol
    ```
+
+### Experimental external backing agents for native voice
+
+An external orchestrator can use the native realtime audio transports while owning background
+work. First call `thread/realtime/externalCapabilities` with `{}` and require
+`{"protocolVersion":1}`. Fail closed if the method is absent or the version is unsupported:
+older servers may ignore unknown start fields and otherwise run the host Codex agent.
+
+Start with `externalOrchestrator: true`. When `includeStartupContext` is omitted or true,
+`externalStartupContext` is required and limited to 5,300 estimated tokens. It must describe the
+external session; no host history, workspace scan, or configured startup-context fallback is
+used. `includeStartupContext: false` permits omission. External mode is incompatible with
+`clientManagedHandoffs: true` and `codexResponsesAsItems: true`. Nonempty
+`realtimeStartInstructions`/`realtimeEndInstructions`, nondefault `codexResponseHandoffMode`,
+`codexResponseHandoffChannelPrefixes`, and `codexResponseItemPrefix` are rejected. These host
+backing-agent settings cannot be silently applied to external work. Configure external system
+instructions in the external orchestrator; provider metadata owns voice feedback phase.
+
+Wait for `thread/realtime/started.incarnationId` before admitting input. The ID is server-generated
+and changes on every successful start, even if the host thread and `realtimeSessionId` are reused.
+`thread/realtime/externalHandoff` contains `threadId`, `incarnationId`, `realtimeSessionId`,
+`handoffId`, nullable `itemId`, `source` (`handoff` or `transcriptTail`), raw `inputTranscript`,
+`activeTranscript`, and nullable `transcriptTail`. Transcript entries contain `role` and `text`.
+Delegations in this mode are emitted exclusively to the client; no host-agent turn is started.
+When enabled, the remaining call tail is emitted before the closed notification. Tail input has a
+new handoff ID, no native item ID, and the transcript in `transcriptTail`.
+
+Send ordered `thread/realtime/externalEvent` requests with:
+
+```json
+{
+  "threadId": "host-thread",
+  "incarnationId": "from-started-notification",
+  "handoffId": "native-handoff-or-null",
+  "executionId": "external-whole-work-id",
+  "sequence": 1,
+  "event": { "type": "itemStarted", "itemId": "stable-text-item", "phase": null, "text": null }
+}
+```
+
+The global sequence starts at one and is contiguous across all executions in an incarnation.
+Serialize requests. A successful response `{ "accepted": true }` means the event passed validation
+and its output was queued to that incarnation, not that the remote audio server played it.
+Retry the exact same payload and sequence after an uncertain response; identical replay returns
+`accepted: false`, while conflicting replay, gaps, and stale incarnations fail with invalid request.
+Do not retry old feedback under a replacement incarnation. External runtime `error` and `closed`
+notifications also include `incarnationId`; ignore notifications for other incarnations. Startup
+errors before a session exists carry null and must not close an unrelated active binding.
+
+Events are `itemStarted {itemId, phase, text}`, `itemDelta {itemId, delta}`, and
+`itemEnded {itemId, text, phase}`. Phase is nullable or `commentary`/`final_answer`, matching native
+message phases. Item IDs are stable within an execution and cannot be reused. Every delta/end
+retains the handoff association selected at start. The final text is authoritative: it may supply
+a missing suffix or replace output that has not yet streamed. A correction contradicting emitted
+text or phase is rejected rather than speaking duplicate/corrected prefixes. Unknown phase is
+buffered until item end; it is not inferred from the text. V3 metadata-bearing output streams with
+bounded head/tail truncation and uses commentary/speakable channels according to provider phase.
+V1/V2 preserve their existing native delivery shapes and deliver complete items.
+
+Only `workSettled {handoffIds}`, `workFailed {message, handoffIds}`, or
+`workCancelled {handoffIds}` settle whole work. `handoffIds` is the complete, duplicate-free list
+of native handoffs admitted to that execution, including handoffs with no text output; it is empty
+for typed-only work. The top-level handoff ID is null or a member of this list. One execution can
+cover several handoffs; another execution cannot reuse its claimed handoffs. Successful settlement
+requires all started items to have ended. Provider steps and item endings never imply settlement.
+Failures and cancellation explicitly retire partial items. Native V1/V2 handoffs are acknowledged
+only at explicit settlement, including each no-text handoff.
+
+Per incarnation, limits are 16,384 events / 8 MiB replay payload, 128 executions, 512 items per
+execution, and 4,096 handoffs. Item/failure text is limited to 64 KiB and execution/item identifiers to 256 bytes.
+Capacity errors require ending and replacing the voice incarnation; they never silently evict
+replay state. Spoken text retains the existing 1,000-estimated-token output budget.
+
+Stopping voice closes only the native realtime transport. It does not cancel external work.
+The orchestrator owns durable work, approval/question routing, explicit work cancellation, and
+results after voice ends. A client or proxy must route typed work to that same external session;
+ordinary host `turn/start` remains a host-agent API. Native `appendText` still supplies conversation
+context to voice and is not a substitute for durable typed-work admission. This public API does
+not supply the closed-source desktop microphone button wiring; end-to-end audio requires a client
+using these methods and an available native realtime service.

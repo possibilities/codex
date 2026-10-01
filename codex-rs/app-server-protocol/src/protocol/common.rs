@@ -883,6 +883,18 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadRealtimeStartResponse,
     },
+    #[experimental("thread/realtime/externalCapabilities")]
+    ThreadRealtimeExternalCapabilities => "thread/realtime/externalCapabilities" {
+        params: v2::ThreadRealtimeExternalCapabilitiesParams,
+        serialization: None,
+        response: v2::ThreadRealtimeExternalCapabilitiesResponse,
+    },
+    #[experimental("thread/realtime/externalEvent")]
+    ThreadRealtimeExternalEvent => "thread/realtime/externalEvent" {
+        params: v2::ThreadRealtimeExternalEventParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadRealtimeExternalEventResponse,
+    },
     #[experimental("thread/realtime/appendAudio")]
     ThreadRealtimeAppendAudio => "thread/realtime/appendAudio" {
         params: v2::ThreadRealtimeAppendAudioParams,
@@ -1768,6 +1780,8 @@ server_notification_definitions! {
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
     #[experimental("thread/realtime/started")]
     ThreadRealtimeStarted => "thread/realtime/started" (v2::ThreadRealtimeStartedNotification),
+    #[experimental("thread/realtime/externalHandoff")]
+    ThreadRealtimeExternalHandoff => "thread/realtime/externalHandoff" (v2::ThreadRealtimeExternalHandoffNotification),
     #[experimental("thread/realtime/itemAdded")]
     ThreadRealtimeItemAdded => "thread/realtime/itemAdded" (v2::ThreadRealtimeItemAddedNotification),
     #[experimental("thread/realtime/transcript/delta")]
@@ -3636,6 +3650,8 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                external_orchestrator: false,
+                external_startup_context: None,
                 client_managed_handoffs: Some(true),
                 delegation_ack_filler: Some(false),
                 flush_transcript_tail_on_session_end: Some(true),
@@ -3679,6 +3695,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "externalStartupContext": null,
                     "clientManagedHandoffs": true,
                     "delegationAckFiller": false,
                     "flushTranscriptTailOnSessionEnd": true,
@@ -3722,6 +3739,8 @@ mod tests {
         let default_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                external_orchestrator: false,
+                external_startup_context: None,
                 client_managed_handoffs: None,
                 delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
@@ -3749,6 +3768,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "externalStartupContext": null,
                     "clientManagedHandoffs": null,
                     "delegationAckFiller": null,
                     "flushTranscriptTailOnSessionEnd": null,
@@ -3774,6 +3794,8 @@ mod tests {
         let null_prompt_request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
             params: v2::ThreadRealtimeStartParams {
+                external_orchestrator: false,
+                external_startup_context: None,
                 client_managed_handoffs: None,
                 delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
@@ -3801,6 +3823,7 @@ mod tests {
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
+                    "externalStartupContext": null,
                     "clientManagedHandoffs": null,
                     "delegationAckFiller": null,
                     "flushTranscriptTailOnSessionEnd": null,
@@ -4026,6 +4049,8 @@ mod tests {
         let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
             params: v2::ThreadRealtimeStartParams {
+                external_orchestrator: false,
+                external_startup_context: None,
                 client_managed_handoffs: None,
                 delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: None,
@@ -4174,6 +4199,7 @@ mod tests {
     fn thread_realtime_started_notification_is_marked_experimental() {
         let notification =
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
+                incarnation_id: None,
                 thread_id: "thr_123".to_string(),
                 realtime_session_id: Some("sess_456".to_string()),
                 version: RealtimeConversationVersion::V1,

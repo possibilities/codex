@@ -151,6 +151,7 @@ fn wraps_realtime_delegation_input_with_xml_escaping_without_transcript() {
 async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
     let state = RealtimeHandoffState {
+        external_orchestrator: false,
         output_tx: tx,
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),

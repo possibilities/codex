@@ -540,6 +540,9 @@ pub enum Op {
     /// Start a realtime conversation stream.
     RealtimeConversationStart(ConversationStartParams),
 
+    /// Starts native realtime with an external backing agent.
+    RealtimeConversationStartExternal(crate::external_realtime::ExternalRealtimeStartParams),
+
     /// Send audio input to the running realtime conversation stream.
     RealtimeConversationAudio(ConversationAudioParams),
 
@@ -869,6 +872,7 @@ impl Op {
             Self::Interrupt => "interrupt",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
+            Self::RealtimeConversationStartExternal(_) => "realtime_conversation_start_external",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
@@ -1299,6 +1303,9 @@ pub enum EventMsg {
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
 
+    /// Raw delegation exported exclusively to the external backing agent.
+    RealtimeConversationExternalHandoff(crate::external_realtime::ExternalRealtimeHandoffEvent),
+
     /// Realtime conversation streaming payload event.
     RealtimeConversationRealtime(RealtimeConversationRealtimeEvent),
 
@@ -1646,17 +1653,23 @@ pub enum CodexResponseHandoffMode {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct RealtimeConversationStartedEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incarnation_id: Option<String>,
     pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct RealtimeConversationRealtimeEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incarnation_id: Option<String>,
     pub payload: RealtimeEvent,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct RealtimeConversationClosedEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incarnation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -5789,6 +5802,7 @@ mod tests {
     #[test]
     fn realtime_conversation_started_event_uses_realtime_session_id() {
         let event = RealtimeConversationStartedEvent {
+            incarnation_id: None,
             realtime_session_id: Some("conv_1".to_string()),
             version: RealtimeConversationVersion::V2,
         };

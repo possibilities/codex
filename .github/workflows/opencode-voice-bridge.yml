@@ -1,0 +1,32 @@
+name: OpenCode voice bridge
+
+on:
+  pull_request:
+    paths:
+      - "external-orchestrator-bridge/**"
+      - ".github/workflows/opencode-voice-bridge.yml"
+  push:
+    branches: ["voice/opencode-v2"]
+    paths:
+      - "external-orchestrator-bridge/**"
+      - ".github/workflows/opencode-voice-bridge.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm run check && npm test
+        working-directory: external-orchestrator-bridge

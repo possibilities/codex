@@ -399,12 +399,30 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::RealtimeConversationStarted(event) => {
             let notification = ThreadRealtimeStartedNotification {
+                incarnation_id: event.incarnation_id,
                 thread_id: conversation_id.to_string(),
                 realtime_session_id: event.realtime_session_id,
                 version: event.version,
             };
             outgoing
                 .send_server_notification(ServerNotification::ThreadRealtimeStarted(notification))
+                .await;
+        }
+        EventMsg::RealtimeConversationExternalHandoff(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::ThreadRealtimeExternalHandoff(
+                    codex_app_server_protocol::ThreadRealtimeExternalHandoffNotification {
+                        thread_id: conversation_id.to_string(),
+                        incarnation_id: event.incarnation_id,
+                        realtime_session_id: event.realtime_session_id,
+                        handoff_id: event.handoff_id,
+                        item_id: event.item_id,
+                        source: event.source,
+                        input_transcript: event.input_transcript,
+                        active_transcript: event.active_transcript,
+                        transcript_tail: event.transcript_tail,
+                    },
+                ))
                 .await;
         }
         EventMsg::RealtimeConversationSdp(event) => {
@@ -538,6 +556,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
             RealtimeEvent::Error(message) => {
                 let notification = ThreadRealtimeErrorNotification {
+                    incarnation_id: event.incarnation_id,
                     thread_id: conversation_id.to_string(),
                     message,
                 };
@@ -548,6 +567,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         },
         EventMsg::RealtimeConversationClosed(event) => {
             let notification = ThreadRealtimeClosedNotification {
+                incarnation_id: event.incarnation_id,
                 thread_id: conversation_id.to_string(),
                 reason: event.reason,
             };

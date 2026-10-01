@@ -738,6 +738,25 @@ pub(super) async fn submission_loop(
                     }
                     false
                 }
+                Op::RealtimeConversationStartExternal(params) => {
+                    if let Err(err) = crate::realtime_conversation::handle_start_external(
+                        &sess,
+                        sub.id.clone(),
+                        params,
+                    )
+                    .await
+                    {
+                        sess.send_event_raw(Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: err.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::Other),
+                            }),
+                        })
+                        .await;
+                    }
+                    false
+                }
                 Op::RealtimeConversationAudio(params) => {
                     handle_realtime_conversation_audio(&sess, sub.id.clone(), params).await;
                     false

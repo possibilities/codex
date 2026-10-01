@@ -184,6 +184,7 @@ async fn assert_start_error(params: ConversationStartParams, expected_error: &st
         .await?;
     let error = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::Error(message),
         }) => Some(message.clone()),
         _ => None,

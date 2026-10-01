@@ -320,6 +320,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -351,6 +352,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 
     let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::AudioOut(frame),
         }) => Some(frame.clone()),
         _ => None,
@@ -708,6 +710,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -896,6 +899,7 @@ async fn conversation_webrtc_start_uses_avas_query() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id,
@@ -1052,6 +1056,7 @@ async fn conversation_webrtc_default_v1_rejects_explicit_v2_voice() -> Result<()
 
     let error = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::Error(message),
         }) => Some(message.clone()),
         _ => None,
@@ -1145,6 +1150,7 @@ async fn conversation_webrtc_start_uses_configured_call_base_url_for_avas() -> R
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id,
@@ -1275,6 +1281,7 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
         loop {
             match test.codex.next_event().await?.msg {
                 EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    incarnation_id: None,
                     payload: RealtimeEvent::Error(message),
                 }) => {
                     anyhow::bail!("pending sideband task emitted a stale realtime error: {message}")
@@ -1364,6 +1371,7 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
 
     let err = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::Error(message),
         }) => Some(message.clone()),
         _ => None,
@@ -1457,6 +1465,7 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -1555,6 +1564,7 @@ async fn assert_transport_close_tail_flush(
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -1669,6 +1679,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
 
     let err = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::Error(message),
         }) => Some(message.clone()),
         _ => None,
@@ -1727,6 +1738,7 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
 
     let err = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::Error(message),
         }) => Some(message.clone()),
         _ => None,
@@ -1832,6 +1844,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -1869,6 +1882,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -1894,6 +1908,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         .await?;
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::AudioOut(frame),
         }) if frame.data == "AQID" => Some(()),
         _ => None,
@@ -1978,6 +1993,7 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -2054,6 +2070,7 @@ async fn conversation_uses_default_realtime_backend_prompt() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -2138,6 +2155,7 @@ async fn conversation_uses_empty_instructions_for_null_or_empty_prompt() -> Resu
 
         let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                incarnation_id: None,
                 payload:
                     RealtimeEvent::SessionUpdated {
                         realtime_session_id: session_id,
@@ -2215,6 +2233,7 @@ async fn conversation_uses_explicit_start_voice() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -2284,6 +2303,7 @@ async fn conversation_uses_configured_realtime_voice() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -2341,6 +2361,7 @@ async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
 
     let error = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::Error(message),
         }) => Some(message.clone()),
         _ => None,
@@ -2399,6 +2420,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -3040,6 +3062,7 @@ async fn conversation_user_text_turn_is_not_sent_to_realtime() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -3148,6 +3171,7 @@ async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_respon
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::NoopRequested(RealtimeNoopRequested { call_id, .. }),
         }) if call_id == "call_silent" => Some(()),
         _ => None,
@@ -3258,6 +3282,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -3271,6 +3296,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) if handoff.handoff_id == "handoff_1" => Some(()),
         _ => None,
@@ -3435,6 +3461,7 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id,
@@ -3446,6 +3473,7 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
     .await;
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) if handoff.handoff_id == "delegation_stream" => Some(()),
         _ => None,
@@ -3608,6 +3636,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -3620,6 +3649,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) if handoff.handoff_id == "handoff_item_done" => Some(()),
         _ => None,
@@ -3644,6 +3674,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::ConversationItemDone { item_id },
         }) if item_id == "item_item_done" => Some(()),
         _ => None,
@@ -3771,6 +3802,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -3784,6 +3816,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) if handoff.handoff_id == "handoff_inbound"
             && handoff.input_transcript == "text from realtime" =>
@@ -3892,6 +3925,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -4006,6 +4040,7 @@ async fn inbound_handoff_request_sends_transcript_delta_after_each_handoff() -> 
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -4233,6 +4268,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -4247,6 +4283,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
         Duration::from_millis(500),
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                incarnation_id: None,
                 payload: RealtimeEvent::AudioOut(frame),
             }) => Some(frame.clone()),
             _ => None,
@@ -4367,6 +4404,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -4379,6 +4417,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) if handoff.input_transcript == "delegate now" => Some(()),
         _ => None,
@@ -4416,6 +4455,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
 
     let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::AudioOut(frame),
         }) => Some(frame.clone()),
         _ => None,
@@ -4531,6 +4571,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -4543,6 +4584,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) if handoff.input_transcript == "delegate now" => Some(()),
         _ => None,
@@ -4553,6 +4595,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
         Duration::from_millis(500),
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                incarnation_id: None,
                 payload: RealtimeEvent::AudioOut(frame),
             }) => Some(frame.clone()),
             _ => None,
@@ -4683,6 +4726,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
         .await?;
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -4725,6 +4769,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) if handoff.input_transcript == "steer via realtime" => Some(()),
         _ => None,
@@ -4848,6 +4893,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
@@ -4860,6 +4906,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload: RealtimeEvent::HandoffRequested(handoff),
         }) => (handoff.handoff_id == "handoff_audio" && handoff.input_transcript == delegated_text)
             .then_some(()),
@@ -4871,6 +4918,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
         Duration::from_millis(500),
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                incarnation_id: None,
                 payload: RealtimeEvent::AudioOut(frame),
             }) => Some(frame.clone()),
             _ => None,

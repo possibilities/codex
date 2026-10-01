@@ -1,6 +1,7 @@
 pub mod account;
 mod agent_path;
 pub mod auth;
+pub mod external_realtime;
 mod response_item_id;
 mod session_id;
 mod thread_id;

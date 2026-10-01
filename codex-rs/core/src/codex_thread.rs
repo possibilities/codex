@@ -243,6 +243,14 @@ impl CodexThread {
         self.io.submit(op).await
     }
 
+    /// Applies external feedback only to the current native voice incarnation.
+    pub async fn realtime_external_event(
+        &self,
+        params: codex_protocol::external_realtime::ExternalRealtimeEventParams,
+    ) -> CodexResult<bool> {
+        self.session.conversation.external_event(params).await
+    }
+
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.session.services.session_telemetry.clone()

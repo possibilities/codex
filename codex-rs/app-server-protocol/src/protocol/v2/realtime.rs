@@ -68,6 +68,12 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
     pub thread_id: String,
+    /// Routes delegations exclusively to an external backing agent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub external_orchestrator: bool,
+    /// Required in external mode when startup context is enabled. Never falls back to host history.
+    #[ts(optional = nullable)]
+    pub external_startup_context: Option<String>,
     /// Leaves Codex response handoffs to the client's explicit append calls instead of forwarding
     /// them automatically. Defaults to false.
     #[ts(optional = nullable)]
@@ -243,6 +249,8 @@ pub struct ThreadRealtimeListVoicesResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartedNotification {
+    /// Present for external sessions; changes on every successful start.
+    pub incarnation_id: Option<String>,
     pub thread_id: String,
     pub realtime_session_id: Option<String>,
     pub version: RealtimeConversationVersion,
@@ -304,6 +312,7 @@ pub struct ThreadRealtimeSdpNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeErrorNotification {
+    pub incarnation_id: Option<String>,
     pub thread_id: String,
     pub message: String,
 }
@@ -313,6 +322,60 @@ pub struct ThreadRealtimeErrorNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeClosedNotification {
+    pub incarnation_id: Option<String>,
     pub thread_id: String,
     pub reason: Option<String>,
+}
+
+/// EXPERIMENTAL - structured delegation from native voice to an external backing agent.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeExternalHandoffNotification {
+    pub thread_id: String,
+    pub incarnation_id: String,
+    pub realtime_session_id: Option<String>,
+    pub handoff_id: String,
+    pub item_id: Option<String>,
+    pub source: codex_protocol::external_realtime::ExternalRealtimeHandoffSource,
+    pub input_transcript: String,
+    pub active_transcript: Vec<codex_protocol::protocol::RealtimeTranscriptEntry>,
+    pub transcript_tail: Option<Vec<codex_protocol::protocol::RealtimeTranscriptEntry>>,
+}
+
+/// EXPERIMENTAL - ordered external output for one native voice incarnation.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeExternalEventParams {
+    pub thread_id: String,
+    pub incarnation_id: String,
+    #[ts(optional = nullable)]
+    pub handoff_id: Option<String>,
+    pub execution_id: String,
+    /// Contiguous, starts at one, shared by all executions in this incarnation.
+    pub sequence: u64,
+    pub event: codex_protocol::external_realtime::ExternalRealtimeEvent,
+}
+
+/// EXPERIMENTAL - false means an identical replay was already accepted.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeExternalEventResponse {
+    pub accepted: bool,
+}
+
+/// EXPERIMENTAL - detect external orchestration before starting any voice session.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeExternalCapabilitiesParams {}
+
+/// EXPERIMENTAL - supported external wire contract. Clients must fail closed on absence/mismatch.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeExternalCapabilitiesResponse {
+    pub protocol_version: u32,
 }

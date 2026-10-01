@@ -17,6 +17,7 @@ fn absolute_path(path: &str) -> AbsolutePathBuf {
 
 fn thread_realtime_started_notification() -> ServerNotification {
     ServerNotification::ThreadRealtimeStarted(ThreadRealtimeStartedNotification {
+        incarnation_id: None,
         thread_id: "thread-1".to_string(),
         realtime_session_id: None,
         version: RealtimeConversationVersion::V1,

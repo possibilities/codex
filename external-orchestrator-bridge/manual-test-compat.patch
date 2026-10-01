@@ -1,0 +1,12 @@
+diff --git a/codex-rs/core/tests/suite/compact_remote.rs b/codex-rs/core/tests/suite/compact_remote.rs
+index 8a86ef74a2..dd955dec13 100644
+--- a/codex-rs/core/tests/suite/compact_remote.rs
++++ b/codex-rs/core/tests/suite/compact_remote.rs
+@@ -280,6 +280,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
+ 
+     wait_for_event_match(codex, |msg| match msg {
+         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
++            incarnation_id: None,
+             payload:
+                 RealtimeEvent::SessionUpdated {
+                     realtime_session_id: session_id,

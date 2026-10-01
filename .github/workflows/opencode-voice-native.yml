@@ -1,0 +1,73 @@
+name: OpenCode native voice contract
+
+on:
+  push:
+    branches: ["voice/opencode-v2"]
+    paths:
+      - "codex-rs/**"
+      - ".github/workflows/opencode-voice-native.yml"
+  pull_request:
+    paths:
+      - "codex-rs/protocol/**"
+      - "codex-rs/app-server-protocol/**"
+      - "codex-rs/app-server/**"
+      - "codex-rs/core/**"
+      - ".github/workflows/opencode-voice-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-voice-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      AWS_EC2_METADATA_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Check the manual compatibility prerequisite
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          source = Path('codex-rs/core/tests/suite/compact_remote.rs').read_text()
+          start = source.index('async fn start_realtime_conversation(')
+          body = source[start:source.index('async fn ', start + 10)]
+          if 'incarnation_id: None,' not in body:
+              raise SystemExit('Manual prerequisite: review and apply external-orchestrator-bridge/manual-test-compat.patch, then commit it with your own GitHub tools. The public branch is incomplete until this one-line test change is present.')
+          PYTHON
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt,clippy,rust-src
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: just@1.58.0,cargo-nextest@0.9.146
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libcap-dev
+      - name: Verify safe protocol and realtime library scope
+        run: >-
+          just test --locked
+          -p codex-protocol -p codex-app-server-protocol -p codex-core --lib
+          -E 'package(codex-protocol) | package(codex-app-server-protocol) | test(realtime_conversation)'
+          --test-threads 2
+      - name: Verify public app-server API against loopback fixtures
+        run: |
+          set -o pipefail
+          just test --locked -p codex-app-server --test all \
+            -E 'test(suite::v2::realtime_conversation::external_tests::)' \
+            --test-threads 2 --success-output final 2>&1 | tee /tmp/native-voice-integration.log
+          if grep -F 'Skipping test' /tmp/native-voice-integration.log; then
+            echo 'Synthetic loopback integration was skipped; this is not a passing validation.' >&2
+            exit 1
+          fi

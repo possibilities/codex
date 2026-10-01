@@ -1330,6 +1330,17 @@ impl MessageProcessor {
                     .thread_realtime_start(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadRealtimeExternalCapabilities { .. } => Ok(Some(
+                codex_app_server_protocol::ThreadRealtimeExternalCapabilitiesResponse {
+                    protocol_version: 1,
+                }
+                .into(),
+            )),
+            ClientRequest::ThreadRealtimeExternalEvent { params, .. } => {
+                self.turn_processor
+                    .thread_realtime_external_event(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadRealtimeAppendAudio { params, .. } => {
                 self.turn_processor
                     .thread_realtime_append_audio(&request_id, params)

@@ -1118,6 +1118,177 @@
       ],
       "type": "string"
     },
+    "ExternalRealtimeEvent": {
+      "oneOf": [
+        {
+          "properties": {
+            "item_id": {
+              "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "itemStarted"
+              ],
+              "title": "ItemStartedExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "type"
+          ],
+          "title": "ItemStartedExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "item_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "itemDelta"
+              ],
+              "title": "ItemDeltaExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "item_id",
+            "type"
+          ],
+          "title": "ItemDeltaExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item_id": {
+              "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "itemEnded"
+              ],
+              "title": "ItemEndedExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "text",
+            "type"
+          ],
+          "title": "ItemEndedExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "handoff_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "workSettled"
+              ],
+              "title": "WorkSettledExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_ids",
+            "type"
+          ],
+          "title": "WorkSettledExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "handoff_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workFailed"
+              ],
+              "title": "WorkFailedExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_ids",
+            "message",
+            "type"
+          ],
+          "title": "WorkFailedExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "handoff_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "workCancelled"
+              ],
+              "title": "WorkCancelledExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_ids",
+            "type"
+          ],
+          "title": "WorkCancelledExternalRealtimeEvent",
+          "type": "object"
+        }
+      ]
+    },
     "FeedbackUploadParams": {
       "properties": {
         "classification": {

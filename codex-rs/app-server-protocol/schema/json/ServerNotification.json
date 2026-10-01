@@ -1364,6 +1364,13 @@
       ],
       "type": "string"
     },
+    "ExternalRealtimeHandoffSource": {
+      "enum": [
+        "handoff",
+        "transcriptTail"
+      ],
+      "type": "string"
+    },
     "FileChangeOutputDeltaNotification": {
       "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server no longer emits this notification.",
       "properties": {
@@ -3167,6 +3174,21 @@
       ],
       "type": "string"
     },
+    "RealtimeTranscriptEntry": {
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
     "ReasoningEffort": {
       "description": "A non-empty reasoning effort value advertised by the model.",
       "minLength": 1,
@@ -4883,6 +4905,12 @@
     "ThreadRealtimeClosedNotification": {
       "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
       "properties": {
+        "incarnationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reason": {
           "type": [
             "string",
@@ -4901,6 +4929,12 @@
     "ThreadRealtimeErrorNotification": {
       "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
       "properties": {
+        "incarnationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message": {
           "type": "string"
         },
@@ -4910,6 +4944,62 @@
       },
       "required": [
         "message",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeExternalHandoffNotification": {
+      "description": "EXPERIMENTAL - structured delegation from native voice to an external backing agent.",
+      "properties": {
+        "activeTranscript": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": "array"
+        },
+        "handoffId": {
+          "type": "string"
+        },
+        "incarnationId": {
+          "type": "string"
+        },
+        "inputTranscript": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "realtimeSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalRealtimeHandoffSource"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "transcriptTail": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "activeTranscript",
+        "handoffId",
+        "incarnationId",
+        "inputTranscript",
+        "source",
         "threadId"
       ],
       "type": "object"
@@ -4963,6 +5053,13 @@
     "ThreadRealtimeStartedNotification": {
       "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
       "properties": {
+        "incarnationId": {
+          "description": "Present for external sessions; changes on every successful start.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "realtimeSessionId": {
           "type": [
             "string",
@@ -7141,6 +7238,26 @@
         "params"
       ],
       "title": "Thread/realtime/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/externalHandoff"
+          ],
+          "title": "Thread/realtime/externalHandoffNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeExternalHandoffNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/externalHandoffNotification",
       "type": "object"
     },
     {

@@ -6604,6 +6604,184 @@
       ],
       "type": "string"
     },
+    "ExternalRealtimeEvent": {
+      "oneOf": [
+        {
+          "properties": {
+            "item_id": {
+              "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "itemStarted"
+              ],
+              "title": "ItemStartedExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "type"
+          ],
+          "title": "ItemStartedExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "item_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "itemDelta"
+              ],
+              "title": "ItemDeltaExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "item_id",
+            "type"
+          ],
+          "title": "ItemDeltaExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item_id": {
+              "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "itemEnded"
+              ],
+              "title": "ItemEndedExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "text",
+            "type"
+          ],
+          "title": "ItemEndedExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "handoff_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "workSettled"
+              ],
+              "title": "WorkSettledExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_ids",
+            "type"
+          ],
+          "title": "WorkSettledExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "handoff_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "workFailed"
+              ],
+              "title": "WorkFailedExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_ids",
+            "message",
+            "type"
+          ],
+          "title": "WorkFailedExternalRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "handoff_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "workCancelled"
+              ],
+              "title": "WorkCancelledExternalRealtimeEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_ids",
+            "type"
+          ],
+          "title": "WorkCancelledExternalRealtimeEvent",
+          "type": "object"
+        }
+      ]
+    },
+    "ExternalRealtimeHandoffSource": {
+      "enum": [
+        "handoff",
+        "transcriptTail"
+      ],
+      "type": "string"
+    },
     "FeedbackRequirements": {
       "properties": {
         "enabled": {
@@ -12400,6 +12578,21 @@
       ],
       "type": "string"
     },
+    "RealtimeTranscriptEntry": {
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
     "RealtimeVoice": {
       "enum": [
         "alloy",
@@ -15411,6 +15604,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/realtime/externalHandoff"
+              ],
+              "title": "Thread/realtime/externalHandoffNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadRealtimeExternalHandoffNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/externalHandoffNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/realtime/itemAdded"
               ],
               "title": "Thread/realtime/itemAddedNotificationMethod",
@@ -18183,6 +18396,12 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
       "properties": {
+        "incarnationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reason": {
           "type": [
             "string",
@@ -18203,6 +18422,12 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
       "properties": {
+        "incarnationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message": {
           "type": "string"
         },
@@ -18215,6 +18440,64 @@
         "threadId"
       ],
       "title": "ThreadRealtimeErrorNotification",
+      "type": "object"
+    },
+    "ThreadRealtimeExternalHandoffNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL - structured delegation from native voice to an external backing agent.",
+      "properties": {
+        "activeTranscript": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": "array"
+        },
+        "handoffId": {
+          "type": "string"
+        },
+        "incarnationId": {
+          "type": "string"
+        },
+        "inputTranscript": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "realtimeSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalRealtimeHandoffSource"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "transcriptTail": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "activeTranscript",
+        "handoffId",
+        "incarnationId",
+        "inputTranscript",
+        "source",
+        "threadId"
+      ],
+      "title": "ThreadRealtimeExternalHandoffNotification",
       "type": "object"
     },
     "ThreadRealtimeInitialItem": {
@@ -18331,6 +18614,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
       "properties": {
+        "incarnationId": {
+          "description": "Present for external sessions; changes on every successful start.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "realtimeSessionId": {
           "type": [
             "string",
