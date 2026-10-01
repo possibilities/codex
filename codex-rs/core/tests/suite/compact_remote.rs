@@ -280,6 +280,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
 
     wait_for_event_match(codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            incarnation_id: None,
             payload:
                 RealtimeEvent::SessionUpdated {
                     realtime_session_id: session_id,
