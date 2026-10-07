@@ -6,7 +6,7 @@ on:
       - "external-orchestrator-bridge/**"
       - ".github/workflows/opencode-voice-bridge.yml"
   push:
-    branches: ["voice/opencode-v2"]
+    branches: ["voice/opencode-v2", "carry/native-voice", "integration"]
     paths:
       - "external-orchestrator-bridge/**"
       - ".github/workflows/opencode-voice-bridge.yml"

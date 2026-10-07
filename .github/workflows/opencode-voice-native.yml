@@ -2,7 +2,7 @@ name: OpenCode native voice contract
 
 on:
   push:
-    branches: ["voice/opencode-v2"]
+    branches: ["voice/opencode-v2", "carry/native-voice", "integration"]
     paths:
       - "codex-rs/**"
       - ".github/workflows/opencode-voice-native.yml"
